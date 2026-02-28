@@ -2,10 +2,12 @@
 
 ## Smart Image Cropper - Automatisches Bildverarbeitungstool
 
-**Version:** 1.0  
-**Datum:** 14. Februar 2026  
-**Status:** Draft  
+**Version:** 1.0.0
+**Datum:** 28. Februar 2026
+**Status:** Released
 **Autor:** Produktentwicklung
+**Repository:** https://github.com/BassBoost1981/SmartImageCropper
+**Release:** https://github.com/BassBoost1981/SmartImageCropper/releases/tag/v1.0.0
 
 ---
 
@@ -15,12 +17,14 @@
 Smart Image Cropper ist eine Desktop-Anwendung für die automatisierte Batch-Verarbeitung von Bildern mit Personenerkennung. Das Tool schneidet Bilder intelligent auf Personen zu und entfernt gleichzeitig Watermarks, wobei der gesamte Prozess in Echtzeit visualisiert wird.
 
 ### 1.2 Kernfunktionalität
-- **Automatische Personenerkennung** mittels KI (YOLO)
+- **Automatische Personenerkennung** mittels KI (YOLOv8)
 - **Intelligentes Cropping** mit konfigurierbarem Padding
-- **Watermark-Entfernung** durch Zonen-basiertes Cropping
-- **Live-Visualisierung** des Verarbeitungsprozesses
-- **Batch-Verarbeitung** für hunderte Bilder
+- **Watermark-Entfernung** manuell (Zonen-basiert) + automatisch (KI-basierte Erkennung via zweites YOLO-Modell)
+- **Multi-Person Handling** mit interaktivem Auswahl-Dialog (klickbare Bounding-Boxen)
+- **Live-Visualisierung** des Verarbeitungsprozesses (Split-View Vorher/Nachher)
+- **Batch-Verarbeitung** für hunderte Bilder mit Echtzeit-Statistiken
 - **Vollständig offline** und portabel (keine Installation erforderlich)
+- **Zwei Build-Varianten** — GPU (CUDA) und CPU-only
 
 ### 1.3 Zielgruppe
 - Fotografen mit großen Bildbeständen
@@ -55,25 +59,31 @@ Nutzer müssen große Mengen an Bildern manuell zuschneiden, wobei:
 
 ### 3.1 Ziele (In Scope)
 
-**Phase 1 - MVP:**
-- ✅ Automatische Personenerkennung mit YOLO v8
+**Phase 1 - MVP (abgeschlossen):**
+- ✅ Automatische Personenerkennung mit YOLOv8n
 - ✅ Batch-Verarbeitung (unbegrenzte Bildanzahl)
-- ✅ Live-Vorschau während Verarbeitung
-- ✅ Watermark-Entfernung (zonenbasiert)
-- ✅ Moderne, intuitive UI
+- ✅ Live-Vorschau während Verarbeitung (Split-View Vorher/Nachher)
+- ✅ Watermark-Entfernung manuell (zonenbasiert, Slider 0-30%)
+- ✅ Moderne, intuitive Glassmorphism UI (Dark Theme, Lexend Font)
 - ✅ Portable EXE (keine Installation)
-- ✅ GPU-Beschleunigung (CUDA)
+- ✅ GPU-Beschleunigung (CUDA) mit automatischem CPU-Fallback
 
-**Phase 2 - Erweitert:**
-- ⏳ Manuelle Korrektur-Möglichkeit (Review-Modus)
-- ⏳ Batch-Einstellungen (unterschiedliche Configs)
-- ⏳ Export-Formate (JPEG, PNG, WebP)
-- ⏳ Metadaten-Erhaltung (EXIF)
+**Phase 2 - Erweitert (größtenteils abgeschlossen):**
+- ✅ Multi-Person Handling (interaktiver Auswahl-Dialog mit klickbaren Bounding-Boxen)
+- ✅ Review-Modus (DetectionSelectionDialog bei Mehrfach-Erkennung)
+- ✅ Auto-Watermark-Erkennung (zweites YOLO-Modell mit Plausibilitäts-Filtering)
+- ✅ Export-Formate (JPEG, PNG, WebP — Output im Originalformat)
+- ✅ Echtzeit-Statistiken (Geschwindigkeit, ETA, Erfolgsrate)
+- ✅ Keyboard Shortcuts (Ctrl+O, Space, Escape, Pfeiltasten, P)
+- ✅ Pause/Resume bei Multi-Detection (automatisch mit Dialog)
+- ⏳ Metadaten-Erhaltung (EXIF) — Config-Key definiert, noch nicht implementiert
+- ⏳ Drag & Drop für Ordner/Dateien
+- ⏳ Thumbnails/Galerie-Ansicht
 
-**Phase 3 - Advanced:**
-- 🔮 Multi-Person Handling
+**Phase 3 - Advanced (offen):**
 - 🔮 AI-basiertes Watermark Inpainting
-- 🔮 Cloud-Sync optional
+- 🔮 Tooltips & Onboarding-Tutorial
+- 🔮 Kontextmenüs
 - 🔮 Plugins/Extensions System
 
 ### 3.2 Nicht-Ziele (Out of Scope)
@@ -168,9 +178,9 @@ graph TD
 | ID | Anforderung | Priorität | Details |
 |----|-------------|-----------|---------|
 | **FR-001** | YOLO-basierte Personenerkennung | P0 | YOLOv8n für Geschwindigkeit, Confidence Threshold: 0.5 |
-| **FR-002** | Multi-Person Handling | P1 | Größte Person auswählen als Haupt-Subjekt |
+| **FR-002** | Multi-Person Handling | P0 ✅ | Interaktiver Auswahl-Dialog (klickbare Boxen), Auto-Regeln: all/largest/highest_conf |
 | **FR-003** | Automatisches Cropping | P0 | Bounding Box + konfigurierbares Padding |
-| **FR-004** | Watermark-Zonen Cropping | P0 | Prozentuale Zone (default: untere 15%) |
+| **FR-004** | Watermark-Zonen Cropping | P0 ✅ | Manuell: Slider 0-30% (default: 0%). Auto: KI-Erkennung via zweites YOLO-Modell (best.pt) mit Plausibilitäts-Filter |
 | **FR-005** | Batch-Verarbeitung | P0 | Unbegrenzte Anzahl, Multi-Threading |
 | **FR-006** | Format-Support | P0 | JPEG, PNG, BMP, WebP (Input) |
 | **FR-007** | Qualitäts-Einstellungen | P1 | JPEG Quality 70-100% |
@@ -180,26 +190,29 @@ graph TD
 
 | ID | Feature | Priorität | Beschreibung |
 |----|---------|-----------|--------------|
-| **FR-101** | Split-View Vorschau | P0 | Interaktiver Slider für Vorher/Nachher |
-| **FR-102** | Thumbnail-Galerie | P1 | Scrollbare Grid-Ansicht aller Bilder |
-| **FR-103** | Detection Overlay | P1 | Zeigt Erkennungs-Boxen auf Original |
-| **FR-104** | Fortschrittsanzeige | P0 | Prozent, ETA, Geschwindigkeit |
-| **FR-105** | Statistik-Dashboard | P1 | Anzahl, Erfolgsrate, Zeitersparnis |
-| **FR-106** | Ansichts-Modi | P1 | Side-by-Side, Split, Overlay, Grid |
-| **FR-107** | Pause/Resume | P2 | Verarbeitung anhalten/fortsetzen |
-| **FR-108** | Review-Modus | P2 | Manuelle Überprüfung jedes Bildes |
+| **FR-101** | Split-View Vorschau | P0 ✅ | Vorher/Nachher nebeneinander mit Detection-Overlays und Bild-Navigation |
+| **FR-102** | Thumbnail-Galerie | P1 ⏳ | Noch nicht implementiert — nur Prev/Next Navigation |
+| **FR-103** | Detection Overlay | P1 ✅ | Farbige Bounding-Boxen auf Original (lila=Personen, rot=Watermarks) mit Legende |
+| **FR-104** | Fortschrittsanzeige | P0 ✅ | Verarbeitete/Übersprungene/Fehler, Bilder/s, ETA, Elapsed Time |
+| **FR-105** | Statistik-Dashboard | P1 ✅ | ProgressCard mit 6+ Metriken (in Sidebar integriert) |
+| **FR-106** | Ansichts-Modi | P1 ⏳ | Nur Side-by-Side implementiert, kein Split-Slider/Overlay/Grid |
+| **FR-107** | Pause/Resume | P2 ✅ | Automatische Pause bei Multi-Detection, wartet auf Benutzer-Auswahl |
+| **FR-108** | Review-Modus | P2 ✅ | DetectionSelectionDialog mit klickbaren Boxen, Checkboxen und Auto-Regeln |
 
 ### 5.3 Konfiguration & Settings
 
 | ID | Setting | Typ | Default | Range |
 |----|---------|-----|---------|-------|
-| **FR-201** | Watermark Prozent | Slider | 15% | 0-30% |
-| **FR-202** | Padding | Spinbox | 50px | 0-200px |
-| **FR-203** | JPEG Qualität | Spinbox | 95% | 70-100% |
-| **FR-204** | Preview Delay | Spinbox | 200ms | 0-2000ms |
-| **FR-205** | GPU Verwendung | Checkbox | true | - |
-| **FR-206** | Confidence Threshold | Slider | 0.5 | 0.1-0.9 |
-| **FR-207** | Multi-Person Modus | Dropdown | Größte | Größte/Alle/Erste |
+| **FR-201** | Watermark Prozent | Slider | 0% | 0-30% | ✅ |
+| **FR-202** | Padding | Slider | 10% | 0-50% | ✅ (Prozent statt px) |
+| **FR-203** | JPEG Qualität | Slider | 95 | 50-100 | ✅ |
+| **FR-204** | Preview Delay | — | — | — | ❌ Nicht implementiert |
+| **FR-205** | GPU Verwendung | Checkbox | true | - | ✅ |
+| **FR-206** | Confidence Threshold | Slider | 0.5 | 0.1-0.9 | ✅ |
+| **FR-207** | Multi-Person Modus | Dropdown | ask | ask/all/largest/highest_conf | ✅ |
+| **FR-208** | Watermark Modus | Dropdown | manual | manual/auto/disabled | ✅ |
+| **FR-209** | Max Workers | Slider | 4 | 1-16 | ✅ |
+| **FR-210** | Output Format | Dropdown | original | original (behält Quellformat) | ✅ |
 
 ### 5.4 Datei-Management
 
@@ -240,10 +253,11 @@ Icons: Unicode Emojis + Custom SVG
 
 **Build & Distribution:**
 ```yaml
-Bundler: PyInstaller 6.0+
-Kompression: UPX
+Bundler: PyInstaller 6.0+ (Folder-Mode, kein onefile)
+Kompression: 7-Zip (UPX deaktiviert — verhindert CUDA DLL-Korruption)
 Target: Windows 10/11 (64-bit)
-Installer: Optional NSIS
+Varianten: GPU (CUDA, ~1.6 GB 7z) + CPU-only (~291 MB 7z)
+Distribution: GitHub Releases
 ```
 
 ### 6.2 System-Anforderungen
@@ -269,97 +283,104 @@ Installer: Optional NSIS
 - Startup-Zeit: < 5 Sekunden
 - RAM-Nutzung: < 4 GB bei 1000 Bildern
 
-### 6.3 Architektur
+### 6.3 Architektur (Ist-Zustand)
 
 ```
-┌─────────────────────────────────────────┐
-│           UI Layer (PyQt6)              │
-│  MainWindow │ PreviewWidget │ Gallery   │
-└────────────┬────────────────────────────┘
+┌──────────────────────────────────────────────────────┐
+│                  UI Layer (PyQt6)                     │
+│  MainWindow │ PreviewWidget │ DetectionSelectionDialog│
+│  widgets.py │ styles.py (GLASSMORPHISM_STYLE)        │
+└────────────┬─────────────────────────────────────────┘
+             │ Qt Signals/Slots
+┌────────────▼─────────────────────────────────────────┐
+│           Threading Layer (QThread)                   │
+│  ModelLoaderThread  │ ProcessingThread                │
+│  PreviewLoadThread  │ (threading.Event für Pause)     │
+└────────────┬─────────────────────────────────────────┘
              │
-┌────────────▼────────────────────────────┐
-│        Business Logic Layer             │
-│  ImageProcessor │ SettingsManager       │
-│  QueueManager   │ StatsCollector        │
-└────────────┬────────────────────────────┘
+┌────────────▼─────────────────────────────────────────┐
+│              AI/CV Layer                             │
+│  PersonDetector (yolov8n.pt) │ CropEngine (@static)  │
+│  WatermarkDetector (best.pt) │ threading.Lock()       │
+└────────────┬─────────────────────────────────────────┘
              │
-┌────────────▼────────────────────────────┐
-│         AI/CV Layer                     │
-│  YOLODetector │ CropEngine              │
-│  WatermarkRemover                       │
-└────────────┬────────────────────────────┘
-             │
-┌────────────▼────────────────────────────┐
-│        Data Layer                       │
-│  FileManager │ ImageIO │ ConfigIO       │
-└─────────────────────────────────────────┘
+┌────────────▼─────────────────────────────────────────┐
+│              Data Layer                              │
+│  FileManager (@static) │ ConfigManager │ StatsCollector│
+│  np.fromfile()+cv2.imdecode() für Unicode-Pfade      │
+└──────────────────────────────────────────────────────┘
 ```
 
-### 6.4 Projekt-Struktur
+### 6.4 Projekt-Struktur (Ist-Zustand)
 
 ```
 SmartImageCropper/
+├── main.py                      # Entry Point (QApplication + ConfigManager → MainWindow)
 ├── src/
-│   ├── main.py                 # Entry Point
 │   ├── ui/
-│   │   ├── main_window.py      # Hauptfenster
-│   │   ├── preview_widget.py   # Preview-Komponenten
-│   │   ├── gallery_widget.py   # Thumbnail-Galerie
-│   │   ├── stats_widget.py     # Statistik-Dashboard
-│   │   └── styles.py           # QSS Styling
+│   │   ├── main_window.py       # Hauptfenster (Orchestrierung aller Threads/Signals)
+│   │   ├── preview_widget.py    # Split-View Vorher/Nachher mit Detection-Overlays
+│   │   ├── selection_dialog.py  # Interaktiver Multi-Detection Dialog (klickbare Boxen)
+│   │   ├── widgets.py           # Wiederverwendbare UI-Komponenten (Cards, Buttons)
+│   │   └── styles.py            # GLASSMORPHISM_STYLE (QSS, Dark Theme, #6c5ce7→#a855f7)
 │   ├── core/
-│   │   ├── processor.py        # ImageProcessor Thread
-│   │   ├── detector.py         # YOLO Wrapper
-│   │   ├── cropper.py          # Crop-Engine
-│   │   └── watermark.py        # Watermark-Removal
-│   ├── utils/
-│   │   ├── file_manager.py     # Datei-Handling
-│   │   ├── config.py           # Settings Management
-│   │   ├── logger.py           # Logging
-│   │   └── stats.py            # Statistik-Collector
-│   └── resources/
-│       ├── icons/              # Icons & Assets
-│       └── styles/             # QSS Files
+│   │   ├── processor.py         # QThread-Worker: ModelLoader, Processing, PreviewLoad
+│   │   ├── detector.py          # PersonDetector (YOLOv8n, thread-locked)
+│   │   ├── cropper.py           # CropEngine (@staticmethod, Padding + WM-Avoidance)
+│   │   └── watermark.py         # WatermarkDetector (YOLO + Plausibilitäts-Filter)
+│   └── utils/
+│       ├── file_manager.py      # FileManager (@static, Unicode-sichere I/O)
+│       ├── config.py            # ConfigManager (DEFAULTS + settings.json Merge)
+│       ├── logger.py            # RotatingFileHandler (5MB, 3 Backups)
+│       └── stats.py             # StatsCollector (Echtzeit-Metriken + ETA)
 ├── models/
-│   └── yolov8n.pt              # YOLO Model
+│   ├── yolov8n.pt               # Personenerkennung (~6.5 MB)
+│   └── best.pt                  # Watermark-Erkennung (~109 MB, Auto-Download von HuggingFace)
+├── Font/
+│   └── Lexend-VariableFont_wght.ttf  # UI-Font
 ├── config/
-│   └── settings.json           # User Settings
+│   └── settings.json            # User Settings (runtime, nicht in Git)
 ├── tests/
-│   ├── test_detector.py
-│   ├── test_cropper.py
-│   └── test_ui.py
+│   ├── test_detector.py         # YOLO-Tests (skip wenn Model fehlt)
+│   └── test_cropper.py          # Crop-Logik mit NumPy Arrays
 ├── build/
-│   ├── build.spec              # PyInstaller Spec
-│   └── icon.ico                # App Icon
+│   ├── build.spec               # PyInstaller Spec (folder mode, UPX=off)
+│   ├── app.ico                  # Multi-Resolution Icon (16-256px)
+│   ├── generate_icon.py         # SVG → ICO Konverter
+│   └── runtime_hook_dll.py      # Torch DLL-Pfad Fix für PyInstaller
+├── logo no_bg-cropped.svg       # App Logo (SVG)
 ├── requirements.txt
 ├── requirements-dev.txt
-├── README.md
-└── LICENSE
+├── README.md                    # Zweisprachig (EN/DE)
+└── CLAUDE.md                    # Claude Code Anweisungen
 ```
 
-### 6.5 Abhängigkeiten (requirements.txt)
+### 6.5 Abhängigkeiten (requirements.txt — Ist-Zustand)
 
 ```txt
 # UI Framework
-PyQt6==6.6.1
-PyQt6-Qt6==6.6.1
+PyQt6>=6.6.0
 
 # AI/ML
-ultralytics==8.1.24
-torch==2.2.0+cu121
-torchvision==0.17.0+cu121
+ultralytics>=8.1.0
+torch>=2.2.0
 
 # Bildverarbeitung
-opencv-python==4.9.0.80
-Pillow==10.2.0
-numpy==1.26.3
+opencv-python>=4.9.0
+Pillow>=10.0.0
+numpy>=1.24.0
 
-# Utilities
-pyyaml==6.0.1
-tqdm==4.66.1
+# Model Download
+huggingface-hub>=0.20.0
+```
 
-# Build
-pyinstaller==6.3.0
+**Dev-Dependencies (requirements-dev.txt):**
+```txt
+pytest>=7.4.0
+black>=24.0.0
+flake8>=7.0.0
+mypy>=1.8.0
+pyinstaller>=6.0.0
 ```
 
 ---
@@ -385,36 +406,38 @@ pyinstaller==6.3.0
    - Erfolgs-/Fehler-Toast-Notifications
    - Tooltips auf allen Controls
 
-### 7.2 Farbschema
+### 7.2 Farbschema (Ist-Zustand aus `styles.py`)
 
 ```css
 Primary Colors:
-  Background Gradient: #0f0f1e → #1a1a2e
-  Panel Background: rgba(255, 255, 255, 0.05)
-  Panel Border: rgba(255, 255, 255, 0.1)
+  Background: #0f0f1e
+  Card/Panel: rgba(30, 30, 55, 0.6) (Frosted Glass)
+  Borders: rgba(255, 255, 255, 0.08)
 
 Accent Colors:
-  Primary Gradient: #667eea → #764ba2
-  Success: #10b981
-  Warning: #f59e0b
-  Error: #ef4444
-  
+  Primary Gradient: #6c5ce7 → #a855f7 (Lila)
+  Success: #2ecc71
+  Destructive: #e74c3c
+  Stat Value: #a855f7
+
 Text Colors:
-  Primary: #ffffff
-  Secondary: #94a3b8
-  Disabled: #475569
+  Primary: #e0e0e0
+  Subtitle: #8888aa
+  Label: #c0c0e0
+
+Detection Overlays (selection_dialog.py):
+  Person Boxes: #a855f7 (Lila, durchgezogen)
+  Watermark Boxes: #e74c3c (Rot, gestrichelt)
+  Selected: 100% Opacity, Unselected: 60% Alpha
 ```
 
-### 7.3 Typografie
+### 7.3 Typografie (Ist-Zustand)
 
 ```css
-Font Family: Segoe UI, Arial, sans-serif
-  
-Header: 32px, Bold
-Section Title: 18px, Bold
-Body: 14px, Regular
-Caption: 12px, Regular
-Button: 14px, Semi-Bold
+Font Family: Lexend (Variable Font, gebundelt), Segoe UI (Fallback), sans-serif
+
+Font geladen in main.py aus: Font/Lexend-VariableFont_wght.ttf
+App-weit gesetzt via: app.setFont(QFont("Lexend", 10))
 ```
 
 ### 7.4 Layout-Spezifikation
@@ -447,13 +470,19 @@ Button: 14px, Semi-Bold
 - Image Fade: 200ms
 - Progress Update: 100ms
 
-**Keyboard Shortcuts:**
+**Keyboard Shortcuts (implementiert):**
 ```
-Ctrl+O   - Ordner öffnen
+Ctrl+O       - Quellordner öffnen
+Space        - Start/Stop Toggle
+Escape       - Abbrechen
+Left/Right   - Bild-Navigation (Vorschau)
+P            - Vorschau laden
+```
+
+**Geplant aber noch nicht implementiert:**
+```
 Ctrl+I   - Bilder auswählen
 Ctrl+S   - Settings speichern
-Space    - Start/Pause Toggle
-Esc      - Abbrechen
 F11      - Fullscreen Preview
 Ctrl+,   - Settings Dialog
 ```
@@ -514,86 +543,53 @@ Ctrl+,   - Settings Dialog
 
 ## 9. Entwicklungs-Roadmap
 
-### Phase 1: MVP (4-6 Wochen)
+### Phase 1: MVP — ABGESCHLOSSEN
 
-**Sprint 1-2: Core Engine (2 Wochen)**
-- [ ] Projekt-Setup & Struktur
-- [ ] YOLO Integration & Testing
-- [ ] Basic Crop-Engine
-- [ ] File Management System
-- [ ] Settings Manager
-
-**Sprint 3-4: UI Grundgerüst (2 Wochen)**
-- [ ] PyQt6 Main Window
-- [ ] Settings Panel
-- [ ] File Input UI
-- [ ] Basic Progress Bar
-- [ ] Styling (Phase 1)
-
-**Sprint 5-6: Integration & Polish (2 Wochen)**
-- [ ] ImageProcessor Thread
-- [ ] Live Preview (Side-by-Side)
-- [ ] Batch Processing
-- [ ] Error Handling
-- [ ] MVP Testing
-
-**Deliverable Phase 1:**
-- ✅ Funktionsfähige EXE
-- ✅ Basic UI
-- ✅ Batch-Verarbeitung
-- ✅ Live-Vorschau
+- [x] Projekt-Setup & Struktur
+- [x] YOLO Integration (YOLOv8n) & Testing
+- [x] CropEngine (@staticmethod, Padding + WM-Avoidance)
+- [x] FileManager (Unicode-sichere I/O mit np.fromfile/cv2.imdecode)
+- [x] ConfigManager (DEFAULTS + JSON Merge)
+- [x] PyQt6 MainWindow + Glassmorphism Dark Theme
+- [x] Settings Panel (Sidebar)
+- [x] File Input UI (Ordner-Dialog)
+- [x] ProgressCard mit Echtzeit-Statistiken
+- [x] ProcessingThread (QThread) + Batch Processing
+- [x] Live Preview (Split-View Vorher/Nachher)
+- [x] Error Handling + Logging (RotatingFileHandler)
+- [x] GPU/CUDA Support mit automatischem CPU-Fallback
+- [x] Portable EXE (PyInstaller Folder-Mode)
 
 ---
 
-### Phase 2: Enhanced Features (3-4 Wochen)
+### Phase 2: Enhanced Features — GRÖßTENTEILS ABGESCHLOSSEN
 
-**Sprint 7-8: Advanced UI (2 Wochen)**
-- [ ] Split-View Slider
+- [x] Split-View Vorschau mit Detection-Overlays
+- [x] Statistik in ProgressCard (Bilder/s, ETA, Erfolgsrate)
+- [x] Multi-Person Handling (interaktiver Auswahl-Dialog)
+- [x] Review-Modus (DetectionSelectionDialog)
+- [x] Pause/Resume bei Multi-Detection
+- [x] Auto-Watermark-Erkennung (zweites YOLO-Modell)
+- [x] Keyboard Shortcuts (Ctrl+O, Space, Esc, Pfeiltasten, P)
+- [x] Model Preloading (Background Thread)
 - [ ] Thumbnail-Galerie
-- [ ] Statistik-Dashboard
-- [ ] Multiple View-Modes
-- [ ] Animation & Transitions
-
-**Sprint 9-10: Advanced Processing (2 Wochen)**
-- [ ] Review-Modus
-- [ ] Pause/Resume
-- [ ] Batch-Configs
-- [ ] Export-Formate
-- [ ] EXIF-Handling
-
-**Deliverable Phase 2:**
-- ✅ Professionelle UI
-- ✅ Review-Workflows
-- ✅ Erweiterte Konfiguration
+- [ ] EXIF/Metadaten-Erhaltung
+- [ ] Drag & Drop
 
 ---
 
-### Phase 3: Optimization & Polish (2-3 Wochen)
+### Phase 3: Optimization & Polish — TEILWEISE ABGESCHLOSSEN
 
-**Sprint 11: Performance**
-- [ ] Multi-Threading Optimierung
-- [ ] Memory Management
-- [ ] GPU-Acceleration Tuning
-- [ ] Large Batch Testing (10k+ Bilder)
-
-**Sprint 12: UX Polish**
-- [ ] Keyboard Shortcuts
+- [x] GPU-Acceleration mit CUDA + CPU-Fallback
+- [x] Thread-Safety (Module-Level Locks für YOLO)
+- [x] README (zweisprachig EN/DE)
+- [x] GitHub Repository + Release (v1.0.0)
+- [x] Zwei Build-Varianten: GPU (1.6 GB) + CPU (291 MB)
+- [ ] Tooltips & Onboarding
+- [ ] Kontextmenüs
 - [ ] Drag & Drop
-- [ ] Context Menus
-- [ ] Tooltips & Help
-- [ ] Onboarding Tutorial
-
-**Sprint 13: Documentation & Release**
 - [ ] User Manual (PDF)
-- [ ] Video Tutorials
-- [ ] Installer Creation
-- [ ] Release Testing
-- [ ] v1.0 Release
-
-**Deliverable Phase 3:**
-- ✅ Production-Ready App
-- ✅ Complete Documentation
-- ✅ Installer Package
+- [ ] Performance-Tests (10k+ Bilder)
 
 ---
 
@@ -633,10 +629,10 @@ Ctrl+,   - Settings Dialog
 | Risiko | Wahrscheinlichkeit | Impact | Mitigation |
 |--------|-------------------|--------|------------|
 | **YOLO zu langsam auf CPU** | Mittel | Hoch | CPU-optimierte Models (ONNX), Quantization |
-| **PyInstaller Bundle zu groß** | Hoch | Mittel | UPX Compression, Dependencies minimieren |
-| **GPU-Kompatibilität** | Mittel | Mittel | Graceful CPU-Fallback, Multiple CUDA-Versionen |
+| **PyInstaller Bundle zu groß** | Hoch | Mittel | **Gelöst:** UPX deaktiviert (CUDA-Korruption), stattdessen 7z-Kompression + CPU-only Variante (291 MB) |
+| **GPU-Kompatibilität** | Mittel | Mittel | **Gelöst:** Automatischer CPU-Fallback in PersonDetector + WatermarkDetector, separate CPU-Build-Variante |
 | **RAM-Overflow bei großen Batches** | Niedrig | Hoch | Queue-System, Streaming Processing |
-| **False Positives bei Detection** | Mittel | Mittel | Confidence Threshold anpassbar, Manual Review |
+| **False Positives bei Detection** | Mittel | Mittel | **Gelöst:** Confidence Threshold anpassbar, WatermarkDetector mit Plausibilitäts-Filter (Fläche <15%, Edge-Region), interaktiver Review-Dialog |
 
 ### 11.2 UX Risiken
 
@@ -727,27 +723,18 @@ Ctrl+,   - Settings Dialog
 
 ## 14. Testing-Strategie
 
-### 14.1 Test-Levels
+### 14.1 Test-Levels (Ist-Zustand)
 
-**Unit Tests:**
-- Core-Module: detector.py, cropper.py, file_manager.py
-- Coverage: > 70%
+**Unit Tests (implementiert):**
+- `tests/test_cropper.py` — CropEngine Logik mit reinen NumPy Arrays (kein Model nötig)
+- `tests/test_detector.py` — PersonDetector Tests (skippt automatisch wenn yolov8n.pt fehlt)
 - Framework: pytest
+- Coverage: noch nicht gemessen
 
-**Integration Tests:**
-- ImageProcessor End-to-End
-- File I/O Workflows
-- Settings Persistence
-
-**UI Tests:**
-- PyQt Test Framework
-- Critical User Flows
-- Regression Tests
-
-**Performance Tests:**
-- Batch-Größen: 10, 100, 1000, 5000 Bilder
-- Memory Leak Tests (24h runs)
-- GPU vs CPU Benchmarks
+**Noch nicht implementiert:**
+- Integration Tests (End-to-End Pipeline)
+- UI Tests (PyQt Test Framework)
+- Performance Tests (Batch-Benchmarks)
 
 ### 14.2 Test-Datensets
 
@@ -759,36 +746,50 @@ Ctrl+,   - Settings Dialog
 ### 14.3 Acceptance Criteria
 
 **MVP-Akzeptanz:**
-- [ ] Alle P0 Requirements implementiert
+- [x] Alle P0 Requirements implementiert
 - [ ] Unit Test Coverage > 70%
 - [ ] Performance-Ziele erreicht (GPU: 3+ Bilder/s)
-- [ ] Keine Critical Bugs
+- [x] Keine Critical Bugs
 - [ ] Erfolgreiche 1000-Bilder Batch ohne Crash
 
 ---
 
 ## 15. Deployment & Distribution
 
-### 15.1 Build-Prozess
+### 15.1 Build-Prozess (Ist-Zustand)
 
 ```bash
 # 1. Dependencies installieren
 pip install -r requirements.txt
+pip install -r requirements-dev.txt
 
 # 2. Tests ausführen
-pytest tests/ --cov=src
+pytest tests/ -v
 
-# 3. Build EXE
-pyinstaller build/build.spec --clean
+# 3. Icon generieren (nur einmal oder nach Logo-Änderung)
+python build/generate_icon.py
 
-# 4. YOLO Models hinzufügen
-python scripts/download_models.py
+# 4. EXE bauen (PyInstaller Folder-Mode)
+build_exe.bat
+# oder: pyinstaller build/build.spec --clean --noconfirm
 
-# 5. Package erstellen
-python scripts/create_package.py
+# 5. GPU-Build mit 7-Zip packen
+7z a -t7z -mx=9 SmartImageCropper-v1.0.0-win64-CUDA.7z dist/SmartImageCropper/*
 
-# Output: dist/SmartImageCropper_v1.0.0.zip
+# 6. CPU-Build erstellen (CUDA DLLs entfernen)
+cp -r dist/SmartImageCropper dist/SmartImageCropper-CPU
+# torch_cuda.dll, cu*.dll, cudnn*.dll, nv*.dll, c10_cuda.dll entfernen
+7z a -t7z -mx=9 SmartImageCropper-v1.0.0-win64-CPU.7z dist/SmartImageCropper-CPU/*
+
+# 7. GitHub Release erstellen
+gh release create v1.0.0 *.7z --title "Smart Image Cropper v1.0.0"
 ```
+
+**Build-Ergebnisse (v1.0.0):**
+| Variante | Unkomprimiert | 7z-Archiv |
+|----------|--------------|-----------|
+| GPU (CUDA) | ~4.9 GB | **1.6 GB** |
+| CPU-only | ~1.6 GB | **291 MB** |
 
 ### 15.2 Versioning
 
@@ -803,17 +804,12 @@ python scripts/create_package.py
 - v1.1.0 - Thumbnail Gallery Feature
 - v1.1.1 - Bugfix für GPU Detection
 
-### 15.3 Distribution-Channels
+### 15.3 Distribution-Channels (Ist-Zustand)
 
-**Option A: Open Source**
-- GitHub Releases
-- PyPI Package (optional)
-- Chocolatey Package (Windows)
-
-**Option B: Commercial**
-- Eigene Website + Payment Gateway
-- Gumroad / Paddle
-- Microsoft Store (optional)
+**Gewählt: Open Source (MIT Lizenz)**
+- GitHub Repository: https://github.com/BassBoost1981/SmartImageCropper
+- GitHub Releases: https://github.com/BassBoost1981/SmartImageCropper/releases
+- Zwei Download-Varianten: GPU (CUDA) + CPU-only
 
 ### 15.4 Update-Mechanismus
 
@@ -861,22 +857,18 @@ class UpdateChecker:
 |---------|-------|-------|------------|
 | 0.1 | 2026-02-14 | Team | Initial Draft |
 | 1.0 | 2026-02-14 | Team | Complete PRD |
+| 1.1 | 2026-02-28 | Team | PRD aktualisiert auf Ist-Zustand nach v1.0.0 Release: Phase-Status, implementierte Features, tatsächliche Architektur, Build-Prozess (7z, GPU+CPU), Farbschema, Font, Keyboard Shortcuts, Projektstruktur, Dependencies |
 
 ---
 
 **Nächste Schritte:**
 1. ✅ PRD Review & Approval
-2. ⏳ Technical Specification erstellen
-3. ⏳ UI/UX Mockups in Figma
-4. ⏳ Development Sprint Planning
-5. ⏳ Repository Setup & Project Kickoff
-
----
-
-**Genehmigung:**
-
-| Rolle | Name | Datum | Unterschrift |
-|-------|------|-------|--------------|
-| Product Owner | | | |
-| Tech Lead | | | |
-| UX Designer | | | |
+2. ✅ Development (MVP + erweiterte Features)
+3. ✅ Repository Setup (GitHub)
+4. ✅ v1.0.0 Release (GPU + CPU Build)
+5. ⏳ Thumbnail-Galerie implementieren
+6. ⏳ EXIF/Metadaten-Erhaltung implementieren
+7. ⏳ Drag & Drop für Ordner/Dateien
+8. ⏳ Tooltips & Onboarding
+9. ⏳ Performance-Tests mit großen Batches
+10. ⏳ Test-Coverage erhöhen

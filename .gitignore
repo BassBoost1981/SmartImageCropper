@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+dist/
+build/output/
+*.spec
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# YOLO model weights (too large for git)
+models/*.pt
+*.pt
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# AI agent / tool configs (local only)
+.agents/
+.augment/
+.shared/
+.claude/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Logs
+logs/
+*.log
+
+# Build artifacts
+build/build/
+build/buildbuild/
+dist_build_log.txt
+
+# Config (runtime, user-specific)
+config/settings.json
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Font files (optional, uncomment if needed)
+# Font/

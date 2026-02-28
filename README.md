@@ -22,9 +22,11 @@ A Windows desktop application built with Python and PyQt6 that automatically det
 - **Fully Offline** — No cloud, no uploads, runs 100% locally
 - **Portable** — Standalone Windows EXE (no installation required)
 
-## Screenshots
+## Screenshot
 
-<!-- Add screenshots here -->
+<p align="center">
+  <img src="screenshots/main_window.png" alt="Smart Image Cropper — Main Window" width="900">
+</p>
 
 ## Quick Start
 
@@ -152,6 +154,12 @@ MIT
 Eine Windows-Desktop-Anwendung, entwickelt mit Python und PyQt6, die automatisch Personen in Bildern mittels YOLOv8 erkennt und intelligent um sie herum zuschneidet — mit optionaler Wasserzeichen-Erkennung und -Entfernung. Verarbeitet hunderte Bilder im Batch mit Live-Vorschau.
 
 ---
+
+## Bildschirmfoto
+
+<p align="center">
+  <img src="screenshots/main_window.png" alt="Smart Image Cropper — Hauptfenster" width="900">
+</p>
 
 ## Funktionen
 

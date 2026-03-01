@@ -27,6 +27,7 @@ DEFAULTS = {
     "watermark_confidence": 0.50,  # Confidence-Schwelle fuer Watermark-YOLO
     "watermark_template_enabled": False,  # Vorlage markieren (erstes Bild)
     "watermark_type": "logo",  # "logo" | "text" — Wasserzeichen-Typ
+    "person_detection_enabled": True,  # Personenerkennung aktiv / Person detection on
     "window_width": 1200,
     "window_height": 800,
 }

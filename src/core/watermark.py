@@ -314,6 +314,7 @@ class WatermarkDetector:
             "edge_margin_side": 0.20,      # Seitlich 20%
             "min_aspect_ratio": 0.3,       # Kompakt (quadratisch)
             "max_aspect_ratio": 3.0,
+            "confidence_factor": 1.0,      # Keine Anpassung fuer Logos
         },
         "text": {
             "max_area_ratio": 0.35,       # Text kann breiter sein (max 35%)
@@ -322,6 +323,7 @@ class WatermarkDetector:
             "edge_margin_side": 0.10,      # Text selten seitlich
             "min_aspect_ratio": 0.0,       # Kein Form-Filter (flache Boxen ok)
             "max_aspect_ratio": 999.0,
+            "confidence_factor": 0.55,     # Text-WM braucht niedrigere Schwelle
         },
     }
 
@@ -552,30 +554,121 @@ class WatermarkDetector:
                 )
         return boxes
 
+    def _detect_bottom_text_zoomed(self, image: np.ndarray) -> list[BoundingBox]:
+        """Erkennt kleine Text-Wasserzeichen am unteren Bildrand per Zoom+YOLO.
+
+        Schneidet den unteren 15% des Bildes aus, skaliert ihn 3x hoch und
+        laesst YOLO mit niedriger Confidence (0.15) darauf laufen.
+        Kleine Text-WMs die im Gesamtbild zu klein fuer YOLO sind, werden
+        durch die Vergroesserung erkennbar.
+
+        Crops the bottom 15% of the image, upscales 3x, and runs YOLO with
+        low confidence (0.15) on the zoomed crop. Small text watermarks that
+        are too small for YOLO in the full image become detectable this way.
+        """
+        img_h, img_w = image.shape[:2]
+        crop_pct = 0.15  # Untere 15% / Bottom 15%
+        crop_h = max(int(img_h * crop_pct), 50)
+        crop_y = img_h - crop_h
+
+        # Bottom-Crop ausschneiden / Extract bottom crop
+        bottom_crop = image[crop_y:img_h, :]
+
+        # 3x hochskalieren damit Text-WMs gross genug fuer YOLO werden
+        # Upscale 3x so text WMs become large enough for YOLO detection
+        scale_factor = 3
+        zoomed = cv2.resize(
+            bottom_crop,
+            (img_w * scale_factor, crop_h * scale_factor),
+            interpolation=cv2.INTER_CUBIC,
+        )
+
+        # YOLO mit niedriger Confidence auf Zoom laufen lassen
+        # Run YOLO with low confidence on zoomed crop
+        zoomed_boxes = self._run_yolo_inference(zoomed, conf=0.15, use_tta=False)
+
+        # Auch CLAHE-verstaerkten Zoom versuchen / Also try CLAHE-enhanced zoom
+        if not zoomed_boxes:
+            zoomed_enhanced = self._preprocess_for_detection(zoomed)
+            zoomed_boxes = self._run_yolo_inference(
+                zoomed_enhanced, conf=0.15, use_tta=False
+            )
+
+        if not zoomed_boxes:
+            return []
+
+        # Koordinaten zurueck auf Original-Bild mappen
+        # Map coordinates back to original image
+        result_boxes: list[BoundingBox] = []
+        for zb in zoomed_boxes:
+            orig_x1 = int(zb.x1 / scale_factor)
+            orig_y1 = crop_y + int(zb.y1 / scale_factor)
+            orig_x2 = int(zb.x2 / scale_factor)
+            orig_y2 = crop_y + int(zb.y2 / scale_factor)
+            # Koordinaten begrenzen / Clamp coordinates
+            orig_x1 = max(0, min(orig_x1, img_w))
+            orig_y1 = max(0, min(orig_y1, img_h))
+            orig_x2 = max(0, min(orig_x2, img_w))
+            orig_y2 = max(0, min(orig_y2, img_h))
+            if orig_x2 > orig_x1 and orig_y2 > orig_y1:
+                box = BoundingBox(
+                    x1=orig_x1,
+                    y1=orig_y1,
+                    x2=orig_x2,
+                    y2=orig_y2,
+                    confidence=zb.confidence,
+                )
+                # Plausibilitaet pruefen / Check plausibility
+                if self._is_plausible_watermark(box, img_h, img_w):
+                    result_boxes.append(box)
+
+        if result_boxes:
+            result_boxes = _deduplicate_boxes(result_boxes, iou_threshold=0.5)
+            logger.info(
+                "Bottom-Zoom: %d Text-WM(s) im unteren Bildbereich erkannt",
+                len(result_boxes),
+            )
+
+        return result_boxes
+
     def detect(
         self,
         image: np.ndarray,
         confidence: float | None = None,
     ) -> list[BoundingBox]:
-        """Erkennt Wasserzeichen im Bild. Thread-safe, zweistufig.
+        """Erkennt Wasserzeichen im Bild. Thread-safe, mehrstufig.
 
         Ablauf / Pipeline:
-        1. YOLO-Inferenz auf Original (mit TTA falls enhanced_detection aktiv)
-        2. Falls enhanced: zweiter Pass auf kontrastverstaerktem Bild
-        3. Plausibilitaetsfilter auf alle YOLO-Detections
-        4. Falls keine YOLO-Treffer: Template-Matching als Fallback
-        5. Ergebnisse deduplizieren und zurueckgeben
+        1. Confidence an Watermark-Typ anpassen (Text braucht niedrigere Schwelle)
+        2. YOLO-Inferenz auf Original (mit TTA falls enhanced_detection aktiv)
+        3. Falls enhanced: zweiter Pass auf kontrastverstaerktem Bild
+        4. Plausibilitaetsfilter auf alle YOLO-Detections
+        5. Template-Matching parallel zu YOLO
+        6. Falls Text-Typ und keine Treffer: Bottom-Strip-Fallback
+        7. Ergebnisse deduplizieren und zurueckgeben
         """
         if self._model is None:
             if not self.load_model():
                 return []
 
-        conf = confidence or self._confidence
+        base_conf = confidence or self._confidence
+        # Typ-spezifischen Confidence-Faktor anwenden
+        # Apply type-specific confidence factor (text needs lower threshold)
+        conf_factor = self._params.get("confidence_factor", 1.0)
+        conf = max(base_conf * conf_factor, 0.15)
+        if conf_factor < 1.0:
+            logger.debug(
+                "Text-Modus: Confidence %.2f -> %.2f (Faktor %.2f)",
+                base_conf,
+                conf,
+                conf_factor,
+            )
+
         use_tta = self._enhanced_detection
 
         # Pass 1: YOLO auf Original-Bild (mit TTA wenn enhanced)
         raw_boxes = self._run_yolo_inference(image, conf, use_tta=use_tta)
-        logger.debug("YOLO Pass 1: %d raw detections", len(raw_boxes))
+        logger.debug("YOLO Pass 1: %d raw detections (conf=%.2f)", len(raw_boxes), conf)
 
         # Pass 2: YOLO auf kontrastverstaerktem Bild (nur bei enhanced)
         if self._enhanced_detection:
@@ -610,10 +703,18 @@ class WatermarkDetector:
                 filtered_boxes.extend(template_boxes)
                 filtered_boxes = _deduplicate_boxes(filtered_boxes, iou_threshold=0.4)
 
+        # Text-Typ Fallback: YOLO auf gezoomtem Bottom-Crop wenn nichts gefunden
+        # Text type fallback: YOLO on zoomed bottom crop when nothing found
+        if self._watermark_type == "text" and not filtered_boxes:
+            zoom_boxes = self._detect_bottom_text_zoomed(image)
+            if zoom_boxes:
+                filtered_boxes.extend(zoom_boxes)
+
         logger.info(
-            "%d Wasserzeichen erkannt (conf >= %.2f, enhanced=%s)",
+            "%d Wasserzeichen erkannt (conf >= %.2f, typ=%s, enhanced=%s)",
             len(filtered_boxes),
             conf,
+            self._watermark_type,
             self._enhanced_detection,
         )
         return filtered_boxes
@@ -629,3 +730,14 @@ class WatermarkDetector:
 
     def set_enhanced_detection(self, enhanced: bool) -> None:
         self._enhanced_detection = enhanced
+
+    def set_watermark_type(self, watermark_type: str) -> None:
+        """Aendert den Wasserzeichen-Typ und aktualisiert die Filterparameter.
+
+        Switches between logo/text type-specific detection parameters.
+        """
+        wm_type = watermark_type if watermark_type in self._TYPE_PARAMS else "logo"
+        if wm_type != self._watermark_type:
+            self._watermark_type = wm_type
+            self._params = self._TYPE_PARAMS[wm_type]
+            logger.info("WatermarkDetector Typ geaendert: %s", wm_type)

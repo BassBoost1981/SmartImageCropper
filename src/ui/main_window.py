@@ -48,7 +48,12 @@ logger = get_logger(__name__)
 class MainWindow(QMainWindow):
     """Hauptfenster: Sidebar mit Settings + Content mit Preview."""
 
-    def __init__(self, config: ConfigManager, parent=None):
+    def __init__(
+        self,
+        config: ConfigManager,
+        parent=None,
+        preloaded_detectors: tuple | None = None,
+    ):
         super().__init__(parent)
         self._config = config
         self._processing_thread: ProcessingThread | None = None
@@ -63,7 +68,23 @@ class MainWindow(QMainWindow):
         self._setup_ui()
         self._setup_shortcuts()
         self._load_settings()
-        self._start_model_preload()
+
+        if preloaded_detectors and preloaded_detectors[0] is not None:
+            # Modelle wurden vom Splash-Screen vorgeladen
+            # Models were pre-loaded during splash screen phase
+            self._preview_detector = preloaded_detectors[0]
+            self._preview_wm_detector = preloaded_detectors[1]
+            self._models_loaded = True
+            self._preview_btn.setEnabled(True)
+            self._preview_btn.setText("👁  Vorschau laden")
+            self._eta_label.setText("✅ Modelle bereit")
+            self._progress_bar.setRange(0, 100)
+            self._progress_bar.setValue(0)
+            self._progress_bar.setFormat("%p% — %v/%m Bilder")
+        else:
+            # Fallback: Modelle im Hintergrund laden
+            # Fallback: load models in background thread
+            QTimer.singleShot(200, self._start_model_preload)
 
     def _setup_window(self) -> None:
         self.setWindowTitle("Smart Image Cropper")
@@ -184,6 +205,12 @@ class MainWindow(QMainWindow):
         # --- Einstellungen ---
         settings_group = QGroupBox("Einstellungen")
         settings_layout = QVBoxLayout(settings_group)
+
+        # Personenerkennung Toggle
+        self._person_detect_check = QCheckBox("Personenerkennung aktiv")
+        self._person_detect_check.setChecked(True)
+        self._person_detect_check.toggled.connect(self._on_person_detect_toggled)
+        settings_layout.addWidget(self._person_detect_check)
 
         # Confidence
         self._confidence_spin = StyledDoubleSpinBox(
@@ -357,6 +384,10 @@ class MainWindow(QMainWindow):
         self._workers_spin.setValue(self._config.get("max_workers", 4))
         self._gpu_check.setChecked(self._config.get("use_gpu", True))
 
+        person_enabled = self._config.get("person_detection_enabled", True)
+        self._person_detect_check.setChecked(person_enabled)
+        self._confidence_spin.setEnabled(person_enabled)
+
         wm_mode = self._config.get("watermark_mode", "manual")
         if wm_mode == "manual":
             self._wm_mode.setCurrentIndex(0)
@@ -391,6 +422,9 @@ class MainWindow(QMainWindow):
         self._config.set("jpeg_quality", self._quality_spin.value())
         self._config.set("max_workers", self._workers_spin.value())
         self._config.set("use_gpu", self._gpu_check.isChecked())
+        self._config.set(
+            "person_detection_enabled", self._person_detect_check.isChecked()
+        )
         self._config.set("watermark_percent", self._wm_slider.value())
         self._config.set("watermark_confidence", self._wm_confidence_spin.value())
         self._config.set(
@@ -420,7 +454,9 @@ class MainWindow(QMainWindow):
 
         Starts loading both YOLO models in background thread on app startup.
         """
-        self._eta_label.setText("⏳ KI-Modelle werden geladen...")
+        self._eta_label.setText(
+            "⏳ KI-Modelle werden geladen — Quellordner kann bereits gewählt werden"
+        )
         self._preview_btn.setEnabled(False)
         self._preview_btn.setText("⏳ Modell laden...")
 
@@ -445,7 +481,9 @@ class MainWindow(QMainWindow):
         self._model_loader.start()
 
     def _on_model_load_progress(self, text: str) -> None:
-        self._eta_label.setText(f"⏳ {text}")
+        self._eta_label.setText(
+            f"⏳ {text} — Quellordner kann bereits gewählt werden"
+        )
         self._progress_bar.setFormat(text)
 
     def _on_models_loaded(self, person_detector, wm_detector) -> None:
@@ -463,7 +501,14 @@ class MainWindow(QMainWindow):
         self._eta_label.setText("✅ Modelle bereit")
 
         # Progressbar zuruecksetzen / Reset progress bar to normal mode
-        self._progress_bar.setRange(0, 100)
+        # Falls Bilder schon gescannt wurden, Bildanzahl uebernehmen
+        # If images were scanned during loading, apply the pending count
+        pending = getattr(self, "_pending_image_count", None)
+        if pending is not None:
+            self._progress_bar.setRange(0, pending)
+            self._pending_image_count = None
+        else:
+            self._progress_bar.setRange(0, 100)
         self._progress_bar.setValue(0)
         self._progress_bar.setFormat("%p% — %v/%m Bilder")
 
@@ -472,6 +517,7 @@ class MainWindow(QMainWindow):
     def _on_model_load_error(self, message: str) -> None:
         logger.error("Fehler beim Modell-Preload: %s", message)
         self._model_loader = None
+        self._models_loaded = True  # Erlaube Interaktion trotz Fehler
         # Preview-Button trotzdem aktivieren — Lazy-Load als Fallback
         # Enable preview button anyway — lazy loading as fallback
         self._preview_btn.setEnabled(True)
@@ -479,9 +525,18 @@ class MainWindow(QMainWindow):
         self._eta_label.setText(f"❌ Modell-Fehler: {message}")
 
         # Progressbar zuruecksetzen / Reset progress bar
-        self._progress_bar.setRange(0, 100)
+        pending = getattr(self, "_pending_image_count", None)
+        if pending is not None:
+            self._progress_bar.setRange(0, pending)
+            self._pending_image_count = None
+        else:
+            self._progress_bar.setRange(0, 100)
         self._progress_bar.setValue(0)
         self._progress_bar.setFormat("%p% — %v/%m Bilder")
+
+    def _on_person_detect_toggled(self, checked: bool) -> None:
+        """Confidence-Schwelle ausgrauen wenn Personenerkennung deaktiviert."""
+        self._confidence_spin.setEnabled(checked)
 
     # === Slots ===
 
@@ -504,8 +559,16 @@ class MainWindow(QMainWindow):
         self._image_count_label.setText(
             f"{count} Bilder gefunden" if count > 0 else "Keine Bilder gefunden"
         )
-        self._progress_bar.setMaximum(count)
-        self._progress_bar.setValue(0)
+        # Progressbar nur anpassen wenn Modelle fertig geladen sind,
+        # sonst wuerde der Puls-Modus (indeterminate) unterbrochen
+        # Only update progress bar if models are loaded, otherwise
+        # the indeterminate pulsing mode would be interrupted
+        if self._models_loaded:
+            self._progress_bar.setMaximum(count)
+            self._progress_bar.setValue(0)
+        else:
+            # Merke Bildanzahl fuer spaeter — wird in _on_models_loaded gesetzt
+            self._pending_image_count = count
         self._preview.set_image_count(count)
 
     def _on_wm_mode_changed(self, index: int) -> None:
@@ -559,6 +622,7 @@ class MainWindow(QMainWindow):
             "watermark_type": ["logo", "text"][self._wm_type_combo.currentIndex()],
             "person_model": "models/yolov8n.pt",
             "watermark_model": "models/best.pt",
+            "person_detection_enabled": self._person_detect_check.isChecked(),
             "multi_detection_action": self._config.get("multi_detection_action", "ask"),
         }
 
@@ -686,15 +750,23 @@ class MainWindow(QMainWindow):
         wm_idx = self._wm_mode.currentIndex()
         wm_detector = None
         if wm_idx == 1:  # Auto
+            wm_type = ["logo", "text"][self._wm_type_combo.currentIndex()]
             if self._preview_wm_detector is not None:
                 self._preview_wm_detector.set_confidence(self._wm_confidence_spin.value())
                 self._preview_wm_detector.set_gpu(self._gpu_check.isChecked())
+                self._preview_wm_detector.set_strict_filter(self._wm_strict_check.isChecked())
+                self._preview_wm_detector.set_enhanced_detection(self._wm_enhanced_check.isChecked())
+                self._preview_wm_detector.set_watermark_type(wm_type)
             else:
-                # Fallback: Lazy-Init
+                # Fallback: Lazy-Init mit allen Parametern
+                # Fallback: lazy init with all current parameters
                 self._preview_wm_detector = WatermarkDetector(
                     model_path="models/best.pt",
                     confidence=self._wm_confidence_spin.value(),
                     use_gpu=self._gpu_check.isChecked(),
+                    strict_filter=self._wm_strict_check.isChecked(),
+                    enhanced_detection=self._wm_enhanced_check.isChecked(),
+                    watermark_type=wm_type,
                 )
                 if not self._preview_wm_detector.load_model():
                     detail = self._preview_wm_detector.last_error or "Unbekannter Fehler"
@@ -736,6 +808,7 @@ class MainWindow(QMainWindow):
             wm_mode=wm_mode,
             padding_percent=self._padding_slider.value(),
             wm_percent=self._wm_slider.value(),
+            person_detection_enabled=self._person_detect_check.isChecked(),
             parent=self,
         )
         self._preview_thread.progress.connect(self._on_preview_progress)
@@ -758,18 +831,18 @@ class MainWindow(QMainWindow):
         Called when preview thread finishes. Shows selection dialog if
         multiple detections found.
         """
-        # Crop-Region berechnen für Overlay
-        crop_region = None
-        if person_boxes:
-            wm_idx = self._wm_mode.currentIndex()
-            wm_mode = ["manual", "auto", "disabled"][wm_idx]
-            crop_region = CropEngine.calculate_crop_region(
-                image_shape=original.shape,
-                person_boxes=person_boxes,
-                padding_percent=self._padding_slider.value(),
-                watermark_boxes=wm_boxes if wm_mode == "auto" else None,
-                watermark_percent=self._wm_slider.value() if wm_mode == "manual" else 0,
-            )
+        # Crop-Region berechnen fuer Overlay (auch ohne Person wenn WM vorhanden)
+        # Calculate crop region for overlay (also without person when WM present)
+        wm_idx = self._wm_mode.currentIndex()
+        wm_mode = ["manual", "auto", "disabled"][wm_idx]
+        wm_pct = self._wm_slider.value() if wm_mode == "manual" else 0
+        crop_region = CropEngine.calculate_crop_region(
+            image_shape=original.shape,
+            person_boxes=person_boxes,
+            padding_percent=self._padding_slider.value(),
+            watermark_boxes=wm_boxes if wm_mode == "auto" else None,
+            watermark_percent=wm_pct,
+        )
 
         self._preview.set_current_index(index)
         self._preview.set_preview(
@@ -777,11 +850,13 @@ class MainWindow(QMainWindow):
         )
 
         # Status-Info
-        info_parts = [f"{len(person_boxes)} Person(en)"]
+        info_parts = []
+        if person_boxes:
+            info_parts.append(f"{len(person_boxes)} Person(en)")
         if wm_boxes:
-            info_parts.append(f"{len(wm_boxes)} Watermark(s)")
-        if not person_boxes:
-            info_parts = ["Keine Person erkannt"]
+            info_parts.append(f"{len(wm_boxes)} WM")
+        if not person_boxes and not wm_boxes:
+            info_parts = ["Keine Erkennung"]
         self._eta_label.setText(f"{filename}: {', '.join(info_parts)}")
 
         # UI wiederherstellen / Restore UI

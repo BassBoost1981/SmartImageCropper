@@ -135,10 +135,6 @@ class ImageProcessor:
         person_boxes = self.person_detector.detect(image)
         result["persons"] = len(person_boxes)
 
-        if not person_boxes:
-            result["error"] = "Keine Person erkannt"
-            return result
-
         # Watermark-Erkennung
         watermark_boxes: list[BoundingBox] = []
         wm_percent = 0.0
@@ -148,6 +144,12 @@ class ImageProcessor:
         elif self.watermark_mode == "auto" and self.watermark_detector:
             watermark_boxes = self.watermark_detector.detect(image)
             result["watermarks"] = len(watermark_boxes)
+
+        # Keine Person UND kein Watermark → ueberspringen
+        # No person AND no watermark → skip this image
+        if not person_boxes and not watermark_boxes and wm_percent <= 0:
+            result["error"] = "Keine Person erkannt"
+            return result
 
         # Crop berechnen
         crop_region = self.crop_engine.calculate_crop_region(
@@ -359,18 +361,20 @@ class ProcessingThread(QThread):
             self._auto_rule = multi_action
 
         # Detektoren initialisieren / Initialize detectors
-        person_detector = PersonDetector(
-            model_path=self._config.get("person_model", "models/yolov8n.pt"),
-            confidence=self._config.get("confidence_threshold", 0.5),
-            use_gpu=self._config.get("use_gpu", True),
-        )
-
-        if not person_detector.load_model():
-            detail = person_detector.last_error or "Unbekannter Fehler"
-            self.error_occurred.emit(
-                f"Person-Detection-Model konnte nicht geladen werden:\n{detail}"
+        person_enabled = self._config.get("person_detection_enabled", True)
+        person_detector = None
+        if person_enabled:
+            person_detector = PersonDetector(
+                model_path=self._config.get("person_model", "models/yolov8n.pt"),
+                confidence=self._config.get("confidence_threshold", 0.5),
+                use_gpu=self._config.get("use_gpu", True),
             )
-            return
+            if not person_detector.load_model():
+                detail = person_detector.last_error or "Unbekannter Fehler"
+                self.error_occurred.emit(
+                    f"Person-Detection-Model konnte nicht geladen werden:\n{detail}"
+                )
+                return
 
         watermark_detector = None
         if self._config.get("watermark_mode") == "auto":
@@ -487,12 +491,8 @@ class ProcessingThread(QThread):
             return result
 
         # Erkennung / Detection
-        person_boxes = person_detector.detect(image)
+        person_boxes = person_detector.detect(image) if person_detector else []
         result["persons"] = len(person_boxes)
-
-        if not person_boxes:
-            result["error"] = "Keine Person erkannt"
-            return result
 
         watermark_boxes: list[BoundingBox] = []
         wm_percent = 0.0
@@ -501,12 +501,19 @@ class ProcessingThread(QThread):
         elif processor.watermark_mode == "auto" and watermark_detector:
             watermark_boxes = watermark_detector.detect(image)
 
-            # Watermarks ausserhalb des Schnittbereichs ignorieren
-            # Filter out watermarks that don't overlap with the person crop area
-            watermark_boxes = self._filter_relevant_watermarks(
-                person_boxes, watermark_boxes, processor.padding_percent
-            )
+            # Watermarks ausserhalb des Schnittbereichs nur filtern wenn Personen da sind
+            # Only filter irrelevant watermarks when persons were detected
+            if person_boxes:
+                watermark_boxes = self._filter_relevant_watermarks(
+                    person_boxes, watermark_boxes, processor.padding_percent
+                )
             result["watermarks"] = len(watermark_boxes)
+
+        # Keine Person UND kein Watermark → ueberspringen
+        # No person AND no watermark → skip this image
+        if not person_boxes and not watermark_boxes and wm_percent <= 0:
+            result["error"] = "Keine Person erkannt"
+            return result
 
         # Mehrfach-Erkennung → Auswahl / Multi-detection → selection
         needs_selection = len(person_boxes) > 1 or len(watermark_boxes) > 1
@@ -536,7 +543,7 @@ class ProcessingThread(QThread):
             if self._selection_watermarks is not None:
                 watermark_boxes = self._selection_watermarks
 
-            if not person_boxes:
+            if not person_boxes and not watermark_boxes and wm_percent <= 0:
                 result["error"] = "Keine Person ausgewählt"
                 return result
 
@@ -571,7 +578,7 @@ class ProcessingThread(QThread):
             original = FileManager.load_image(path)
             if original is None:
                 return
-            boxes = processor.person_detector.detect(original)
+            boxes = processor.person_detector.detect(original) if processor.person_detector else []
 
             # Watermark-Erkennung für Preview
             wm_boxes: list[BoundingBox] = []
@@ -586,17 +593,18 @@ class ProcessingThread(QThread):
             elif processor.watermark_mode == "manual":
                 wm_percent = processor.watermark_percent
 
-            if boxes:
-                region = processor.crop_engine.calculate_crop_region(
-                    image_shape=original.shape,
-                    person_boxes=boxes,
-                    padding_percent=processor.padding_percent,
-                    watermark_boxes=wm_boxes if processor.watermark_mode == "auto" else None,
-                    watermark_percent=wm_percent if processor.watermark_mode == "manual" else 0,
-                )
-                if region:
-                    cropped = processor.crop_engine.crop_image(original, region)
-                    self.preview_ready.emit(path, original, cropped, boxes, wm_boxes)
+            # Preview auch ohne Personen wenn Watermarks vorhanden
+            # Show preview even without persons when watermarks are present
+            region = processor.crop_engine.calculate_crop_region(
+                image_shape=original.shape,
+                person_boxes=boxes,
+                padding_percent=processor.padding_percent,
+                watermark_boxes=wm_boxes if processor.watermark_mode == "auto" else None,
+                watermark_percent=wm_percent if processor.watermark_mode == "manual" else 0,
+            )
+            if region:
+                cropped = processor.crop_engine.crop_image(original, region)
+                self.preview_ready.emit(path, original, cropped, boxes, wm_boxes)
         except Exception as e:
             logger.debug("Preview-Fehler: %s", e)
 
@@ -641,6 +649,7 @@ class PreviewLoadThread(QThread):
         wm_mode: str,
         padding_percent: float,
         wm_percent: float,
+        person_detection_enabled: bool = True,
         parent=None,
     ):
         super().__init__(parent)
@@ -651,14 +660,18 @@ class PreviewLoadThread(QThread):
         self._wm_mode = wm_mode
         self._padding_percent = padding_percent
         self._wm_percent = wm_percent
+        self._person_enabled = person_detection_enabled
 
     def run(self) -> None:
         try:
             filename = Path(self._image_path).name
             total_steps = 4 if (self._wm_mode == "auto" and self._wm_detector) else 3
+            if not self._person_enabled:
+                total_steps -= 1  # Personen-Schritt faellt weg
 
             # Schritt 1: Bild laden
-            self.progress.emit(1, total_steps, f"Lade {filename}...")
+            step = 1
+            self.progress.emit(step, total_steps, f"Lade {filename}...")
             image = FileManager.load_image(self._image_path)
             if image is None:
                 self.error_occurred.emit(
@@ -666,29 +679,37 @@ class PreviewLoadThread(QThread):
                 )
                 return
 
-            # Schritt 2: Personen erkennen
-            self.progress.emit(2, total_steps, f"Personen erkennen: {filename}...")
-            person_boxes = self._person_detector.detect(image)
+            # Schritt 2: Personen erkennen (falls aktiviert)
+            # Step 2: Detect persons (if enabled)
+            person_boxes = []
+            if self._person_enabled:
+                step += 1
+                self.progress.emit(step, total_steps, f"Personen erkennen: {filename}...")
+                person_boxes = self._person_detector.detect(image)
 
-            # Schritt 3: Wasserzeichen erkennen (falls Auto)
+            # Wasserzeichen erkennen (falls Auto)
             wm_boxes = []
-            step = 3
             if self._wm_mode == "auto" and self._wm_detector:
+                step += 1
                 self.progress.emit(step, total_steps, f"Wasserzeichen erkennen: {filename}...")
                 wm_boxes = self._wm_detector.detect(image)
-                step = 4
 
             # Letzter Schritt: Zuschneiden
+            # Crop auch ohne Person wenn Watermark vorhanden (ganzes Bild minus WM)
+            # Crop even without person when watermark present (full image minus WM)
+            step += 1
             self.progress.emit(step, total_steps, f"Zuschneiden: {filename}...")
             crop_region = None
             cropped = None
-            if person_boxes:
+            wm_pct = self._wm_percent if self._wm_mode == "manual" else 0
+            has_content = person_boxes or wm_boxes or wm_pct > 0
+            if has_content:
                 crop_region = CropEngine.calculate_crop_region(
                     image_shape=image.shape,
                     person_boxes=person_boxes,
                     padding_percent=self._padding_percent,
                     watermark_boxes=wm_boxes if self._wm_mode == "auto" else None,
-                    watermark_percent=self._wm_percent if self._wm_mode == "manual" else 0,
+                    watermark_percent=wm_pct,
                 )
                 if crop_region:
                     cropped = CropEngine.crop_image(image, crop_region)

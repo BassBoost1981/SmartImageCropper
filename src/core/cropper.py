@@ -44,26 +44,36 @@ class CropEngine:
 
         Berücksichtigt Person-BBoxen, Padding und Watermark-Vermeidung.
         Watermarks außerhalb des ursprünglichen Crop-Bereichs werden ignoriert.
-        """
-        if not person_boxes:
-            return None
+        Wenn keine Person erkannt wird, wird das gesamte Bild als Basis
+        genommen und nur das Watermark entfernt.
 
+        If no persons are detected, uses the full image as base and only
+        removes watermarks.
+        """
         img_h, img_w = image_shape[:2]
 
-        # Vereinige alle Person-BBoxen
-        min_x = min(b.x1 for b in person_boxes)
-        min_y = min(b.y1 for b in person_boxes)
-        max_x = max(b.x2 for b in person_boxes)
-        max_y = max(b.y2 for b in person_boxes)
+        if person_boxes:
+            # Vereinige alle Person-BBoxen
+            min_x = min(b.x1 for b in person_boxes)
+            min_y = min(b.y1 for b in person_boxes)
+            max_x = max(b.x2 for b in person_boxes)
+            max_y = max(b.y2 for b in person_boxes)
 
-        # Padding hinzufügen
-        pad_x = int((max_x - min_x) * padding_percent / 100)
-        pad_y = int((max_y - min_y) * padding_percent / 100)
+            # Padding hinzufügen
+            pad_x = int((max_x - min_x) * padding_percent / 100)
+            pad_y = int((max_y - min_y) * padding_percent / 100)
 
-        crop_x1 = max(0, min_x - pad_x)
-        crop_y1 = max(0, min_y - pad_y)
-        crop_x2 = min(img_w, max_x + pad_x)
-        crop_y2 = min(img_h, max_y + pad_y)
+            crop_x1 = max(0, min_x - pad_x)
+            crop_y1 = max(0, min_y - pad_y)
+            crop_x2 = min(img_w, max_x + pad_x)
+            crop_y2 = min(img_h, max_y + pad_y)
+        else:
+            # Keine Person erkannt → gesamtes Bild als Basis, nur WM entfernen
+            # No person detected → use full image as base, only remove WM
+            has_wm = (watermark_boxes and len(watermark_boxes) > 0) or watermark_percent > 0
+            if not has_wm:
+                return None
+            crop_x1, crop_y1, crop_x2, crop_y2 = 0, 0, img_w, img_h
 
         # Watermark-Vermeidung: manueller Modus (Prozent vom unteren Rand)
         if watermark_percent > 0:
@@ -72,7 +82,13 @@ class CropEngine:
                 crop_y2 = wm_top
 
         # Watermark-Vermeidung: Auto-Modus (erkannte Watermark-Boxen)
-        # Beruecksichtigt Watermarks die den Crop ueberschneiden ODER nahe dran liegen
+        # Bestimmt ob WM eher oben/unten oder links/rechts liegt und
+        # passt nur die dominante Achse an. Verhindert, dass Text-WMs
+        # am unteren Rand auch seitlich abgeschnitten werden.
+        #
+        # Determines if WM is primarily top/bottom or left/right and
+        # only adjusts the dominant axis. Prevents bottom text watermarks
+        # from also cropping the sides.
         if watermark_boxes:
             for wb in watermark_boxes:
                 # Prüfe ob Watermark den Crop-Bereich schneidet oder darin liegt
@@ -80,19 +96,32 @@ class CropEngine:
                 overlaps_y = wb.y1 < crop_y2 and wb.y2 > crop_y1
 
                 if overlaps_x and overlaps_y:
-                    # Watermark schneidet den Crop-Bereich -> anpassen
-                    if wb.y1 > (crop_y1 + crop_y2) / 2:
-                        # Watermark im unteren Bereich -> Crop oben begrenzen
-                        crop_y2 = min(crop_y2, wb.y1)
-                    else:
-                        # Watermark im oberen Bereich -> Crop unten begrenzen
-                        crop_y1 = max(crop_y1, wb.y2)
+                    wm_center_y = (wb.y1 + wb.y2) / 2
+                    wm_center_x = (wb.x1 + wb.x2) / 2
+                    crop_mid_y = (crop_y1 + crop_y2) / 2
+                    crop_mid_x = (crop_x1 + crop_x2) / 2
+                    crop_h = max(crop_y2 - crop_y1, 1)
+                    crop_w = max(crop_x2 - crop_x1, 1)
 
-                    # X-Achse: Watermark rechts -> Crop links begrenzen
-                    if wb.x1 > (crop_x1 + crop_x2) / 2:
-                        crop_x2 = min(crop_x2, wb.x1)
-                    elif wb.x2 < (crop_x1 + crop_x2) / 2:
-                        crop_x1 = max(crop_x1, wb.x2)
+                    # Normalisierte Distanz vom Crop-Zentrum bestimmt dominante Achse
+                    # Normalized distance from crop center determines dominant axis
+                    dist_y = abs(wm_center_y - crop_mid_y) / crop_h
+                    dist_x = abs(wm_center_x - crop_mid_x) / crop_w
+
+                    if dist_y >= dist_x:
+                        # WM ist primaer oben/unten → nur Y anpassen
+                        # WM is primarily top/bottom → only adjust Y
+                        if wm_center_y > crop_mid_y:
+                            crop_y2 = min(crop_y2, wb.y1)
+                        else:
+                            crop_y1 = max(crop_y1, wb.y2)
+                    else:
+                        # WM ist primaer links/rechts → nur X anpassen
+                        # WM is primarily left/right → only adjust X
+                        if wm_center_x > crop_mid_x:
+                            crop_x2 = min(crop_x2, wb.x1)
+                        else:
+                            crop_x1 = max(crop_x1, wb.x2)
 
         # Sicherstellen, dass der Crop-Bereich gültig ist
         if crop_x2 <= crop_x1 or crop_y2 <= crop_y1:

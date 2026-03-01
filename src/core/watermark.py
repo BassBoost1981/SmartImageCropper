@@ -6,6 +6,7 @@ als Primaererkennung, OpenCV-Template-Matching als Fallback fuer bekannte Logos.
 
 import os
 import threading
+from typing import Any
 
 import cv2
 import numpy as np
@@ -270,17 +271,17 @@ class TemplateWatermarkMatcher:
 
             # Konstante Bilder/Templates erzeugen NaN bei TM_CCOEFF_NORMED
             # Constant images/templates produce NaN with TM_CCOEFF_NORMED
-            if np.std(scaled) < 1.0 or np.std(image) < 1.0:
+            if float(np.asarray(scaled).std()) < 1.0 or float(np.asarray(image).std()) < 1.0:
                 continue
 
             result = cv2.matchTemplate(image, scaled, cv2.TM_CCOEFF_NORMED)
 
             # NaN-Werte filtern / Filter NaN values
-            result = np.nan_to_num(result, nan=0.0)
+            result_arr = np.nan_to_num(np.asarray(result), nan=0.0)
 
-            locations = np.where(result >= threshold)
+            locations = np.where(result_arr >= threshold)  # type: ignore[operator]
             for pt_y, pt_x in zip(*locations):
-                conf = float(result[pt_y, pt_x])
+                conf = float(result_arr[int(pt_y), int(pt_x)].item())
                 boxes.append(
                     BoundingBox(
                         x1=int(pt_x),
@@ -305,15 +306,22 @@ class WatermarkDetector:
     HF_REPO = "corzent/yolo11x_watermark_detection"
     HF_FILENAME = "best.pt"
 
+    # Rueckwaertskompatible Basis-Konstanten (Logo-Default)
+    # Backward-compatible base constants (logo default)
+    MAX_AREA_RATIO = 0.25
+    EDGE_MARGIN_BOTTOM = 0.30
+    EDGE_MARGIN_TOP = 0.15
+    EDGE_MARGIN_SIDE = 0.15
+
     # Typ-abhaengige Filterparameter / Type-specific filter parameters
     _TYPE_PARAMS: dict[str, dict] = {
         "logo": {
-            "max_area_ratio": 0.15,       # Logos sind klein (max 15% Bildflaeche)
+            "max_area_ratio": 0.25,       # Logos koennen groesser sein (max 25%)
             "edge_margin_bottom": 0.40,    # Untere 40%
             "edge_margin_top": 0.15,       # Obere 15%
             "edge_margin_side": 0.20,      # Seitlich 20%
             "min_aspect_ratio": 0.3,       # Kompakt (quadratisch)
-            "max_aspect_ratio": 3.0,
+            "max_aspect_ratio": 8.0,       # Breite Logos zulaessig
             "confidence_factor": 1.0,      # Keine Anpassung fuer Logos
         },
         "text": {
@@ -333,13 +341,13 @@ class WatermarkDetector:
         confidence: float = 0.35,
         use_gpu: bool = True,
         strict_filter: bool = True,
-        enhanced_detection: bool = True,
+        enhanced_detection: bool = False,
         watermark_type: str = "logo",
     ):
         self._model_path = model_path
         self._confidence = confidence
         self._use_gpu = use_gpu
-        self._model = None
+        self._model: Any | None = None
         self._last_error: str | None = None
         # Konfigurierbare Filter / Configurable filter settings
         self._strict_filter = strict_filter

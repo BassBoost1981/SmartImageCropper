@@ -130,7 +130,9 @@ class RectangleSelectorWidget(QWidget):
 
         painter.end()
 
-    def mousePressEvent(self, event: QMouseEvent) -> None:
+    def mousePressEvent(self, event: QMouseEvent | None) -> None:
+        if event is None:
+            return
         if event.button() == Qt.MouseButton.LeftButton and self._pixmap:
             self._drawing = True
             self._start_point = event.pos()
@@ -138,7 +140,9 @@ class RectangleSelectorWidget(QWidget):
             self._selection = None
             self.update()
 
-    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+    def mouseMoveEvent(self, event: QMouseEvent | None) -> None:
+        if event is None:
+            return
         if self._drawing and self._pixmap:
             # Clamp innerhalb des Bildes / Clamp within image bounds
             x = max(0, min(event.pos().x(), self._pixmap.width() - 1))
@@ -146,7 +150,9 @@ class RectangleSelectorWidget(QWidget):
             self._end_point = QPoint(x, y)
             self.update()
 
-    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+    def mouseReleaseEvent(self, event: QMouseEvent | None) -> None:
+        if event is None:
+            return
         if event.button() == Qt.MouseButton.LeftButton and self._drawing:
             self._drawing = False
             rect = QRect(self._start_point, self._end_point).normalized()

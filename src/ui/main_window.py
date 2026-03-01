@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QAction, QIcon, QKeySequence, QShortcut
+from PyQt6.QtGui import QIcon, QKeySequence, QShortcut
 from PyQt6.QtSvgWidgets import QSvgWidget
 from PyQt6.QtWidgets import (
     QCheckBox,
@@ -19,7 +19,6 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QScrollArea,
-    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -29,7 +28,7 @@ from src.core.detector import PersonDetector
 from src.core.processor import ModelLoaderThread, PreviewLoadThread, ProcessingThread
 from src.core.watermark import WatermarkDetector
 from src.ui.preview_widget import PreviewWidget
-from src.ui.selection_dialog import DetectionSelectionDialog, SelectionResult
+from src.ui.selection_dialog import DetectionSelectionDialog
 from src.ui.template_dialog import WatermarkTemplateDialog
 from src.ui.widgets import (
     ProgressCard,
@@ -63,6 +62,7 @@ class MainWindow(QMainWindow):
         self._preview_wm_detector: WatermarkDetector | None = None
         self._models_loaded = False
         self._model_loader: ModelLoaderThread | None = None
+        self._pending_image_count: int | None = None
 
         self._setup_window()
         self._setup_ui()
@@ -552,7 +552,6 @@ class MainWindow(QMainWindow):
             output = os.path.join(directory, "cropped")
             self._output_edit.setText(output)
 
-
     def _scan_images(self, directory: str) -> None:
         self._image_paths = FileManager.scan_directory(directory)
         count = len(self._image_paths)
@@ -915,10 +914,12 @@ class MainWindow(QMainWindow):
         )
         if dialog.exec():
             box = dialog.get_selected_box()
-            self._processing_thread.set_template_result(box)
+            if self._processing_thread:
+                self._processing_thread.set_template_result(box)
         else:
             # User hat uebersprungen / User skipped
-            self._processing_thread.set_template_result(None)
+            if self._processing_thread:
+                self._processing_thread.set_template_result(None)
 
     def _on_selection_needed(
         self, path: str, image, person_boxes: list, wm_boxes: list
@@ -938,19 +939,21 @@ class MainWindow(QMainWindow):
         )
 
         if dialog.exec():
-            result = dialog.result
-            self._processing_thread.set_selection_result(
-                persons=result.selected_persons,
-                watermarks=result.selected_watermarks,
-                skip=result.skip_image,
-                rule=result.apply_rule,
-            )
+            result = dialog.selection_result
+            if self._processing_thread:
+                self._processing_thread.set_selection_result(
+                    persons=result.selected_persons,
+                    watermarks=result.selected_watermarks,
+                    skip=result.skip_image,
+                    rule=result.apply_rule,
+                )
         else:
             # Dialog geschlossen (X) → Bild überspringen
             # Dialog closed (X) → skip image
-            self._processing_thread.set_selection_result(
-                persons=None, watermarks=None, skip=True
-            )
+            if self._processing_thread:
+                self._processing_thread.set_selection_result(
+                    persons=None, watermarks=None, skip=True
+                )
 
     def _show_selection_for_preview(
         self,
@@ -972,7 +975,7 @@ class MainWindow(QMainWindow):
         )
 
         if dialog.exec():
-            result = dialog.result
+            result = dialog.selection_result
             if result.skip_image or not result.selected_persons:
                 return
 

@@ -1,7 +1,6 @@
 """Unit Tests für PersonDetector."""
 
 import os
-from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest

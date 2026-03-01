@@ -3,7 +3,7 @@
 import cv2
 import numpy as np
 from PyQt6.QtCore import Qt, QPoint, pyqtSignal
-from PyQt6.QtGui import QImage, QPixmap, QPainter, QPen, QColor, QFont, QBrush
+from PyQt6.QtGui import QImage, QPixmap, QPainter, QPen, QColor, QFont
 from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,

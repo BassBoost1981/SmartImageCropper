@@ -1,7 +1,5 @@
 """Unit Tests fuer WatermarkDetector und TemplateWatermarkMatcher."""
 
-import os
-
 import cv2
 import numpy as np
 import pytest

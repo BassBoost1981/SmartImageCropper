@@ -4,6 +4,7 @@ import os
 import sys
 import threading
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
@@ -75,7 +76,7 @@ class PersonDetector:
         self._model_path = model_path
         self._confidence = confidence
         self._use_gpu = use_gpu
-        self._model = None
+        self._model: Any | None = None
         self._last_error: str | None = None
 
     def load_model(self) -> bool:
@@ -120,13 +121,16 @@ class PersonDetector:
         if self._model is None:
             if not self.load_model():
                 return []
+        if self._model is None:
+            return []
 
         conf = confidence or self._confidence
         device = "cuda" if self._use_gpu else "cpu"
+        model = self._model
 
         with _detection_lock:
             try:
-                results = self._model(
+                results = model(
                     image,
                     conf=conf,
                     device=device,
@@ -136,7 +140,7 @@ class PersonDetector:
             except RuntimeError:
                 # GPU-Fallback auf CPU
                 logger.warning("GPU-Fehler, Fallback auf CPU")
-                results = self._model(
+                results = model(
                     image,
                     conf=conf,
                     device="cpu",

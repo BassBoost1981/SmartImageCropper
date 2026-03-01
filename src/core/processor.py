@@ -2,7 +2,6 @@
 
 import os
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from PyQt6.QtCore import QThread, pyqtSignal
@@ -68,7 +67,7 @@ class ModelLoaderThread(QThread):
 
         # Watermark-Modell laden / Load watermark detection model
         self.progress_text.emit("Lade Wasserzeichen-Erkennung...")
-        wm_detector = WatermarkDetector(
+        wm_detector: WatermarkDetector | None = WatermarkDetector(
             model_path=self._watermark_model,
             confidence=self._wm_confidence,
             use_gpu=self._use_gpu,
@@ -76,7 +75,7 @@ class ModelLoaderThread(QThread):
             enhanced_detection=self._wm_enhanced_detection,
             watermark_type=self._wm_type,
         )
-        if not wm_detector.load_model():
+        if wm_detector is not None and not wm_detector.load_model():
             # Kein kritischer Fehler — Watermark ist optional
             # Not critical — watermark detection is optional
             logger.warning(
@@ -230,6 +229,7 @@ class ProcessingThread(QThread):
     def cancel(self) -> None:
         self._cancelled = True
         self._pause_event.set()  # Pause aufheben falls aktiv / Unblock if paused
+        self._template_event.set()  # Template-Dialog-Wait aufheben / Unblock template wait
 
     def set_selection_result(
         self,
@@ -336,7 +336,15 @@ class ProcessingThread(QThread):
         self._template_box = None
         self._template_event.clear()
         self.template_needed.emit(first_image_path, image)
-        self._template_event.wait()  # Wartet auf UI-Antwort / Wait for UI
+
+        # Keine endlose Blockade: wenn UI-Signal ausbleibt, nach Timeout weiterlaufen.
+        # Avoid endless blocking: continue after timeout if UI signal is missing.
+        if not self._template_event.wait(timeout=30.0):
+            logger.warning(
+                "Template-Dialog Timeout nach 30s fuer %s; fahre ohne Template fort",
+                first_image_path,
+            )
+            return
 
         if self._cancelled:
             return
@@ -362,19 +370,23 @@ class ProcessingThread(QThread):
 
         # Detektoren initialisieren / Initialize detectors
         person_enabled = self._config.get("person_detection_enabled", True)
-        person_detector = None
-        if person_enabled:
-            person_detector = PersonDetector(
-                model_path=self._config.get("person_model", "models/yolov8n.pt"),
-                confidence=self._config.get("confidence_threshold", 0.5),
-                use_gpu=self._config.get("use_gpu", True),
+        if not person_enabled:
+            self.error_occurred.emit(
+                "Personenerkennung darf nicht deaktiviert werden (Crop benoetigt Person-Boxen)."
             )
-            if not person_detector.load_model():
-                detail = person_detector.last_error or "Unbekannter Fehler"
-                self.error_occurred.emit(
-                    f"Person-Detection-Model konnte nicht geladen werden:\n{detail}"
-                )
-                return
+            return
+
+        person_detector = PersonDetector(
+            model_path=self._config.get("person_model", "models/yolov8n.pt"),
+            confidence=self._config.get("confidence_threshold", 0.5),
+            use_gpu=self._config.get("use_gpu", True),
+        )
+        if not person_detector.load_model():
+            detail = person_detector.last_error or "Unbekannter Fehler"
+            self.error_occurred.emit(
+                f"Person-Detection-Model konnte nicht geladen werden:\n{detail}"
+            )
+            return
 
         watermark_detector = None
         if self._config.get("watermark_mode") == "auto":

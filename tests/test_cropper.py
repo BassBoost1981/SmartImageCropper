@@ -1,7 +1,6 @@
 """Unit Tests für CropEngine."""
 
 import numpy as np
-import pytest
 
 from src.core.cropper import CropEngine, CropRegion
 from src.core.detector import BoundingBox

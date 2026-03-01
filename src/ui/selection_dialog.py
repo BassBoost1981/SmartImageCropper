@@ -11,7 +11,6 @@ import cv2
 import numpy as np
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import (
-    QBrush,
     QColor,
     QFont,
     QImage,
@@ -188,8 +187,12 @@ class InteractiveDetectionWidget(QWidget):
 
         painter.end()
 
-    def mousePressEvent(self, event: QMouseEvent) -> None:
-        if self._pixmap is None or event.button() != Qt.MouseButton.LeftButton:
+    def mousePressEvent(self, event: QMouseEvent | None) -> None:
+        if (
+            event is None
+            or self._pixmap is None
+            or event.button() != Qt.MouseButton.LeftButton
+        ):
             return
 
         pos = event.position()
@@ -547,5 +550,5 @@ class DetectionSelectionDialog(QDialog):
         self.accept()
 
     @property
-    def result(self) -> SelectionResult:
+    def selection_result(self) -> SelectionResult:
         return self._result

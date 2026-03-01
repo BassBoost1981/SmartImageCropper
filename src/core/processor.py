@@ -9,7 +9,7 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 from src.core.cropper import CropEngine
 from src.core.detector import BoundingBox, PersonDetector
-from src.core.watermark import WatermarkDetector
+from src.core.watermark import TemplateWatermarkMatcher, WatermarkDetector
 from src.utils.file_manager import FileManager
 from src.utils.logger import get_logger
 from src.utils.stats import StatsCollector
@@ -36,6 +36,9 @@ class ModelLoaderThread(QThread):
         confidence: float = 0.5,
         wm_confidence: float = 0.30,
         use_gpu: bool = True,
+        wm_strict_filter: bool = True,
+        wm_enhanced_detection: bool = False,
+        wm_type: str = "logo",
         parent=None,
     ):
         super().__init__(parent)
@@ -44,6 +47,9 @@ class ModelLoaderThread(QThread):
         self._confidence = confidence
         self._wm_confidence = wm_confidence
         self._use_gpu = use_gpu
+        self._wm_strict_filter = wm_strict_filter
+        self._wm_enhanced_detection = wm_enhanced_detection
+        self._wm_type = wm_type
 
     def run(self) -> None:
         # Personen-Modell laden / Load person detection model
@@ -66,6 +72,9 @@ class ModelLoaderThread(QThread):
             model_path=self._watermark_model,
             confidence=self._wm_confidence,
             use_gpu=self._use_gpu,
+            strict_filter=self._wm_strict_filter,
+            enhanced_detection=self._wm_enhanced_detection,
+            watermark_type=self._wm_type,
         )
         if not wm_detector.load_model():
             # Kein kritischer Fehler — Watermark ist optional
@@ -179,9 +188,12 @@ class ProcessingThread(QThread):
     preview_ready = pyqtSignal(str, object, object, list, list)  # path, original, cropped, person_boxes, watermark_boxes
     batch_finished = pyqtSignal(dict)  # summary stats
     error_occurred = pyqtSignal(str)  # error message
-    # Signal für Auswahl-Dialog / Signal for selection dialog
+    # Signal fuer Auswahl-Dialog / Signal for selection dialog
     # (path, image_ndarray, person_boxes, watermark_boxes)
     selection_needed = pyqtSignal(str, object, list, list)
+    # Signal fuer Template-Markierung / Signal for template marking dialog
+    # (path, image_ndarray) — emitted when YOLO finds no watermark on first image
+    template_needed = pyqtSignal(str, object)
 
     def __init__(
         self,
@@ -197,7 +209,7 @@ class ProcessingThread(QThread):
         self._cancelled = False
         self.stats = StatsCollector()
 
-        # Pause-Mechanismus für Auswahl-Dialog / Pause mechanism for selection dialog
+        # Pause-Mechanismus fuer Auswahl-Dialog / Pause mechanism for selection dialog
         self._pause_event = threading.Event()
         self._pause_event.set()  # initial: nicht pausiert / not paused
         self._selection_persons: list[BoundingBox] | None = None
@@ -206,6 +218,12 @@ class ProcessingThread(QThread):
         # Auto-Regel: None = nachfragen, "all"/"largest"/"highest_conf"
         # Auto rule: None = ask, otherwise apply automatically
         self._auto_rule: str | None = None
+        # Template-Matching: Pause-Event + Ergebnis vom UI
+        # Template matching: pause event + result from UI thread
+        self._template_event = threading.Event()
+        self._template_event.set()  # initial: nicht pausiert
+        self._template_matcher: TemplateWatermarkMatcher | None = None
+        self._template_box: BoundingBox | None = None  # von UI gesetzt / set by UI
 
     def cancel(self) -> None:
         self._cancelled = True
@@ -229,6 +247,59 @@ class ProcessingThread(QThread):
             self._auto_rule = rule
         self._pause_event.set()
 
+    def set_template_result(self, box: BoundingBox | None) -> None:
+        """Wird vom UI-Thread aufgerufen um das Template-Ergebnis zu setzen.
+
+        Called by UI thread to set the template selection and resume processing.
+        box=None means user skipped template marking.
+        """
+        self._template_box = box
+        self._template_event.set()
+
+    @staticmethod
+    def _filter_relevant_watermarks(
+        person_boxes: list[BoundingBox],
+        watermark_boxes: list[BoundingBox],
+        padding_percent: float,
+    ) -> list[BoundingBox]:
+        """Entfernt Watermarks die ausserhalb des Personen-Schnittbereichs liegen.
+
+        Filters out watermark boxes that don't overlap with the person crop
+        region (including padding). This prevents irrelevant detections from
+        affecting the crop or confusing the user.
+        """
+        if not watermark_boxes or not person_boxes:
+            return watermark_boxes
+
+        # Personen-Bereich berechnen (mit Padding) / Calculate person area
+        p_min_x = min(b.x1 for b in person_boxes)
+        p_min_y = min(b.y1 for b in person_boxes)
+        p_max_x = max(b.x2 for b in person_boxes)
+        p_max_y = max(b.y2 for b in person_boxes)
+        pad_x = int((p_max_x - p_min_x) * padding_percent / 100)
+        pad_y = int((p_max_y - p_min_y) * padding_percent / 100)
+        crop_x1 = p_min_x - pad_x
+        crop_y1 = p_min_y - pad_y
+        crop_x2 = p_max_x + pad_x
+        crop_y2 = p_max_y + pad_y
+
+        # Nur Watermarks behalten die den Schnittbereich ueberschneiden
+        # Keep only watermarks that overlap the crop region
+        relevant = [
+            wb for wb in watermark_boxes
+            if wb.x1 < crop_x2 and wb.x2 > crop_x1
+            and wb.y1 < crop_y2 and wb.y2 > crop_y1
+        ]
+
+        filtered_count = len(watermark_boxes) - len(relevant)
+        if filtered_count > 0:
+            logger.info(
+                "%d Watermark(s) ausserhalb des Schnittbereichs ignoriert",
+                filtered_count,
+            )
+
+        return relevant
+
     def _apply_auto_rule(
         self, person_boxes: list[BoundingBox]
     ) -> list[BoundingBox]:
@@ -243,6 +314,39 @@ class ProcessingThread(QThread):
         if self._auto_rule == "highest_conf":
             return [max(person_boxes, key=lambda b: b.confidence)]
         return person_boxes
+
+    def _init_template(
+        self, watermark_detector: WatermarkDetector, first_image_path: str
+    ) -> None:
+        """Zeigt den Template-Dialog fuer das erste Bild.
+
+        When watermark_template_enabled is True, always show the dialog
+        so the user can mark the watermark manually. YOLO is skipped here —
+        the user decides what the watermark looks like.
+        """
+        image = FileManager.load_image(first_image_path)
+        if image is None:
+            return
+
+        # Immer Dialog zeigen — User markiert das Watermark manuell
+        # Always show dialog — user marks the watermark manually
+        matcher = TemplateWatermarkMatcher()
+        self._template_box = None
+        self._template_event.clear()
+        self.template_needed.emit(first_image_path, image)
+        self._template_event.wait()  # Wartet auf UI-Antwort / Wait for UI
+
+        if self._cancelled:
+            return
+
+        if self._template_box is not None:
+            matcher.set_template_from_box(image, self._template_box)
+            watermark_detector.template_matcher = matcher
+            logger.info(
+                "Template manuell markiert fuer: %s", first_image_path
+            )
+        else:
+            logger.info("Kein Template markiert, nur YOLO-Erkennung aktiv")
 
     def run(self) -> None:
         """Hauptverarbeitungsschleife. / Main processing loop."""
@@ -274,6 +378,11 @@ class ProcessingThread(QThread):
                 model_path=self._config.get("watermark_model", "models/best.pt"),
                 confidence=self._config.get("watermark_confidence", 0.30),
                 use_gpu=self._config.get("use_gpu", True),
+                strict_filter=self._config.get("watermark_strict_filter", True),
+                enhanced_detection=self._config.get(
+                    "watermark_enhanced_detection", False
+                ),
+                watermark_type=self._config.get("watermark_type", "logo"),
             )
             if not watermark_detector.load_model():
                 detail = watermark_detector.last_error or "Unbekannter Fehler"
@@ -296,7 +405,15 @@ class ProcessingThread(QThread):
             watermark_percent=self._config.get("watermark_percent", 0.0),
         )
 
-        # Sequentielle Verarbeitung für Auswahl-Dialog-Support
+        # Template-Matching: nur wenn Checkbox aktiviert / Only when template checkbox enabled
+        if (
+            watermark_detector
+            and self._image_paths
+            and self._config.get("watermark_template_enabled", False)
+        ):
+            self._init_template(watermark_detector, self._image_paths[0])
+
+        # Sequentielle Verarbeitung fuer Auswahl-Dialog-Support
         # Sequential processing to support selection dialog pause
         for i, path in enumerate(self._image_paths):
             if self._cancelled:
@@ -383,6 +500,12 @@ class ProcessingThread(QThread):
             wm_percent = processor.watermark_percent
         elif processor.watermark_mode == "auto" and watermark_detector:
             watermark_boxes = watermark_detector.detect(image)
+
+            # Watermarks ausserhalb des Schnittbereichs ignorieren
+            # Filter out watermarks that don't overlap with the person crop area
+            watermark_boxes = self._filter_relevant_watermarks(
+                person_boxes, watermark_boxes, processor.padding_percent
+            )
             result["watermarks"] = len(watermark_boxes)
 
         # Mehrfach-Erkennung → Auswahl / Multi-detection → selection
@@ -455,6 +578,11 @@ class ProcessingThread(QThread):
             wm_percent = 0.0
             if processor.watermark_mode == "auto" and processor.watermark_detector:
                 wm_boxes = processor.watermark_detector.detect(original)
+                # Irrelevante Watermarks filtern / Filter irrelevant watermarks
+                if boxes:
+                    wm_boxes = self._filter_relevant_watermarks(
+                        boxes, wm_boxes, processor.padding_percent
+                    )
             elif processor.watermark_mode == "manual":
                 wm_percent = processor.watermark_percent
 

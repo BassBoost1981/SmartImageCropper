@@ -30,6 +30,7 @@ from src.core.processor import ModelLoaderThread, PreviewLoadThread, ProcessingT
 from src.core.watermark import WatermarkDetector
 from src.ui.preview_widget import PreviewWidget
 from src.ui.selection_dialog import DetectionSelectionDialog, SelectionResult
+from src.ui.template_dialog import WatermarkTemplateDialog
 from src.ui.widgets import (
     ProgressCard,
     StyledButton,
@@ -222,11 +223,58 @@ class MainWindow(QMainWindow):
         self._wm_slider = StyledSlider("Unterer Bereich entfernen", 0, 30, 0, "%")
         wm_layout.addWidget(self._wm_slider)
 
+        # Wasserzeichen-Typ: Logo oder Text / Watermark type: logo or text
+        self._wm_type_label = QLabel("Wasserzeichen-Typ")
+        self._wm_type_label.setVisible(False)
+        wm_layout.addWidget(self._wm_type_label)
+
+        self._wm_type_combo = QComboBox()
+        self._wm_type_combo.addItems(["Logo", "Text"])
+        self._wm_type_combo.setToolTip(
+            "Logo: Kompakte Grafiken in Bildecken (z.B. Firmenlogos)\n"
+            "Text: Breite Schriftzuege am Bildrand (z.B. © Fotograf)"
+        )
+        self._wm_type_combo.setVisible(False)  # Nur bei Auto sichtbar
+        wm_layout.addWidget(self._wm_type_combo)
+
         self._wm_confidence_spin = StyledDoubleSpinBox(
             "WM-Erkennungs-Schwelle", 0.10, 1.0, 0.30, 0.05
         )
         self._wm_confidence_spin.setVisible(False)  # Nur bei Auto sichtbar
         wm_layout.addWidget(self._wm_confidence_spin)
+
+        # Erweiterte Erkennung: TTA + Preprocessing + Template-Matching
+        # Enhanced detection: TTA + preprocessing + template matching fallback
+        self._wm_enhanced_check = QCheckBox("Erweiterte Logo-Erkennung")
+        self._wm_enhanced_check.setToolTip(
+            "Aktiviert Multi-Scale-Erkennung (TTA), Kontrastverstaerkung\n"
+            "und Template-Matching als Fallback fuer schwer erkennbare Logos."
+        )
+        self._wm_enhanced_check.setVisible(False)  # Nur bei Auto sichtbar
+        wm_layout.addWidget(self._wm_enhanced_check)
+
+        # Strikter Filter: Watermarks muessen am Bildrand liegen
+        # Strict filter: watermarks must be at image edges
+        self._wm_strict_check = QCheckBox("Strenger Rand-Filter")
+        self._wm_strict_check.setToolTip(
+            "Wenn aktiv, werden nur Watermarks am Bildrand akzeptiert.\n"
+            "Deaktivieren fuer Logos, die nicht am Rand liegen."
+        )
+        self._wm_strict_check.setChecked(True)
+        self._wm_strict_check.setVisible(False)  # Nur bei Auto sichtbar
+        wm_layout.addWidget(self._wm_strict_check)
+
+        # Vorlage markieren: User markiert beim 1. Bild das Logo manuell
+        # Template marking: user marks the logo on the first image
+        self._wm_template_check = QCheckBox("Vorlage markieren (erstes Bild)")
+        self._wm_template_check.setToolTip(
+            "Beim ersten Bild das Wasserzeichen manuell markieren.\n"
+            "Wird dann per Template-Matching in allen Bildern gesucht.\n"
+            "Ideal fuer Logos, die die KI nicht automatisch erkennt."
+        )
+        self._wm_template_check.setChecked(False)
+        self._wm_template_check.setVisible(False)  # Nur bei Auto sichtbar
+        wm_layout.addWidget(self._wm_template_check)
 
         layout.addWidget(watermark_group)
 
@@ -319,8 +367,20 @@ class MainWindow(QMainWindow):
 
         self._wm_slider.setValue(self._config.get("watermark_percent", 0))
         self._wm_confidence_spin.setValue(
-            self._config.get("watermark_confidence", 0.30)
+            self._config.get("watermark_confidence", 0.35)
         )
+        self._wm_enhanced_check.setChecked(
+            self._config.get("watermark_enhanced_detection", True)
+        )
+        self._wm_strict_check.setChecked(
+            self._config.get("watermark_strict_filter", True)
+        )
+        self._wm_template_check.setChecked(
+            self._config.get("watermark_template_enabled", False)
+        )
+
+        wm_type = self._config.get("watermark_type", "logo")
+        self._wm_type_combo.setCurrentIndex(0 if wm_type == "logo" else 1)
 
     def _save_settings(self) -> None:
         """Speichert aktuelle UI-Einstellungen."""
@@ -333,9 +393,21 @@ class MainWindow(QMainWindow):
         self._config.set("use_gpu", self._gpu_check.isChecked())
         self._config.set("watermark_percent", self._wm_slider.value())
         self._config.set("watermark_confidence", self._wm_confidence_spin.value())
+        self._config.set(
+            "watermark_enhanced_detection", self._wm_enhanced_check.isChecked()
+        )
+        self._config.set(
+            "watermark_strict_filter", self._wm_strict_check.isChecked()
+        )
+        self._config.set(
+            "watermark_template_enabled", self._wm_template_check.isChecked()
+        )
 
         idx = self._wm_mode.currentIndex()
         self._config.set("watermark_mode", ["manual", "auto", "disabled"][idx])
+        self._config.set(
+            "watermark_type", ["logo", "text"][self._wm_type_combo.currentIndex()]
+        )
 
         self._config.set("window_width", self.width())
         self._config.set("window_height", self.height())
@@ -348,9 +420,13 @@ class MainWindow(QMainWindow):
 
         Starts loading both YOLO models in background thread on app startup.
         """
-        self._eta_label.setText("Modelle werden geladen...")
+        self._eta_label.setText("⏳ KI-Modelle werden geladen...")
         self._preview_btn.setEnabled(False)
         self._preview_btn.setText("⏳ Modell laden...")
+
+        # Progressbar pulsieren lassen / Pulse progress bar during loading
+        self._progress_bar.setRange(0, 0)  # Indeterminate / pulsing mode
+        self._progress_bar.setFormat("KI-Modelle werden geladen...")
 
         self._model_loader = ModelLoaderThread(
             person_model="models/yolov8n.pt",
@@ -358,6 +434,9 @@ class MainWindow(QMainWindow):
             confidence=self._confidence_spin.value(),
             wm_confidence=self._wm_confidence_spin.value(),
             use_gpu=self._gpu_check.isChecked(),
+            wm_strict_filter=self._wm_strict_check.isChecked(),
+            wm_enhanced_detection=self._wm_enhanced_check.isChecked(),
+            wm_type=["logo", "text"][self._wm_type_combo.currentIndex()],
             parent=self,
         )
         self._model_loader.progress_text.connect(self._on_model_load_progress)
@@ -366,7 +445,8 @@ class MainWindow(QMainWindow):
         self._model_loader.start()
 
     def _on_model_load_progress(self, text: str) -> None:
-        self._eta_label.setText(text)
+        self._eta_label.setText(f"⏳ {text}")
+        self._progress_bar.setFormat(text)
 
     def _on_models_loaded(self, person_detector, wm_detector) -> None:
         """Wird aufgerufen wenn Modelle im Hintergrund fertig geladen sind.
@@ -380,7 +460,13 @@ class MainWindow(QMainWindow):
 
         self._preview_btn.setEnabled(True)
         self._preview_btn.setText("👁  Vorschau laden")
-        self._eta_label.setText("Modelle bereit")
+        self._eta_label.setText("✅ Modelle bereit")
+
+        # Progressbar zuruecksetzen / Reset progress bar to normal mode
+        self._progress_bar.setRange(0, 100)
+        self._progress_bar.setValue(0)
+        self._progress_bar.setFormat("%p% — %v/%m Bilder")
+
         logger.info("Modelle im Hintergrund geladen und bereit")
 
     def _on_model_load_error(self, message: str) -> None:
@@ -390,7 +476,12 @@ class MainWindow(QMainWindow):
         # Enable preview button anyway — lazy loading as fallback
         self._preview_btn.setEnabled(True)
         self._preview_btn.setText("👁  Vorschau laden")
-        self._eta_label.setText(f"Modell-Fehler: {message}")
+        self._eta_label.setText(f"❌ Modell-Fehler: {message}")
+
+        # Progressbar zuruecksetzen / Reset progress bar
+        self._progress_bar.setRange(0, 100)
+        self._progress_bar.setValue(0)
+        self._progress_bar.setFormat("%p% — %v/%m Bilder")
 
     # === Slots ===
 
@@ -418,9 +509,17 @@ class MainWindow(QMainWindow):
         self._preview.set_image_count(count)
 
     def _on_wm_mode_changed(self, index: int) -> None:
-        # Slider nur bei manuellem Modus, Confidence nur bei Auto
-        self._wm_slider.setVisible(index == 0)
-        self._wm_confidence_spin.setVisible(index == 1)
+        # Slider nur bei manuellem Modus, Auto-Optionen nur bei Auto
+        # Slider only in manual mode, auto options only in auto mode
+        is_manual = index == 0
+        is_auto = index == 1
+        self._wm_slider.setVisible(is_manual)
+        self._wm_type_label.setVisible(is_auto)
+        self._wm_type_combo.setVisible(is_auto)
+        self._wm_confidence_spin.setVisible(is_auto)
+        self._wm_enhanced_check.setVisible(is_auto)
+        self._wm_strict_check.setVisible(is_auto)
+        self._wm_template_check.setVisible(is_auto)
 
     def _toggle_processing(self) -> None:
         if self._processing_thread and self._processing_thread.isRunning():
@@ -454,6 +553,10 @@ class MainWindow(QMainWindow):
             "watermark_mode": wm_mode,
             "watermark_percent": self._wm_slider.value(),
             "watermark_confidence": self._wm_confidence_spin.value(),
+            "watermark_strict_filter": self._wm_strict_check.isChecked(),
+            "watermark_enhanced_detection": self._wm_enhanced_check.isChecked(),
+            "watermark_template_enabled": self._wm_template_check.isChecked(),
+            "watermark_type": ["logo", "text"][self._wm_type_combo.currentIndex()],
             "person_model": "models/yolov8n.pt",
             "watermark_model": "models/best.pt",
             "multi_detection_action": self._config.get("multi_detection_action", "ask"),
@@ -470,6 +573,7 @@ class MainWindow(QMainWindow):
         self._processing_thread.batch_finished.connect(self._on_batch_finished)
         self._processing_thread.error_occurred.connect(self._on_error)
         self._processing_thread.selection_needed.connect(self._on_selection_needed)
+        self._processing_thread.template_needed.connect(self._on_template_needed)
         self._processing_thread.start()
 
         self._start_btn.setEnabled(False)
@@ -723,6 +827,23 @@ class MainWindow(QMainWindow):
         self._load_preview_for_index(index)
 
     # === Selection Dialog (Multi-Detection) ===
+
+    def _on_template_needed(self, path: str, image) -> None:
+        """Batch-Thread braucht Watermark-Template vom User.
+
+        Processing thread found no watermark in the first image via YOLO.
+        Opens template marking dialog so user can manually select a region.
+        """
+        filename = Path(path).name
+        dialog = WatermarkTemplateDialog(
+            image=image, filename=filename, parent=self
+        )
+        if dialog.exec():
+            box = dialog.get_selected_box()
+            self._processing_thread.set_template_result(box)
+        else:
+            # User hat uebersprungen / User skipped
+            self._processing_thread.set_template_result(None)
 
     def _on_selection_needed(
         self, path: str, image, person_boxes: list, wm_boxes: list

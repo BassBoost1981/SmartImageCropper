@@ -72,22 +72,27 @@ class CropEngine:
                 crop_y2 = wm_top
 
         # Watermark-Vermeidung: Auto-Modus (erkannte Watermark-Boxen)
-        # Nur Watermarks berücksichtigen, die den ursprünglichen Crop-Bereich schneiden
+        # Beruecksichtigt Watermarks die den Crop ueberschneiden ODER nahe dran liegen
         if watermark_boxes:
             for wb in watermark_boxes:
-                # Prüfe ob Watermark den Crop-Bereich schneidet
-                # (nicht nur ob es nahe ist, sondern echte Überschneidung)
+                # Prüfe ob Watermark den Crop-Bereich schneidet oder darin liegt
                 overlaps_x = wb.x1 < crop_x2 and wb.x2 > crop_x1
                 overlaps_y = wb.y1 < crop_y2 and wb.y2 > crop_y1
 
                 if overlaps_x and overlaps_y:
                     # Watermark schneidet den Crop-Bereich -> anpassen
                     if wb.y1 > (crop_y1 + crop_y2) / 2:
-                        # Watermark ist im unteren Bereich -> Crop nach oben begrenzen
+                        # Watermark im unteren Bereich -> Crop oben begrenzen
                         crop_y2 = min(crop_y2, wb.y1)
                     else:
-                        # Watermark ist im oberen Bereich -> Crop nach unten begrenzen
+                        # Watermark im oberen Bereich -> Crop unten begrenzen
                         crop_y1 = max(crop_y1, wb.y2)
+
+                    # X-Achse: Watermark rechts -> Crop links begrenzen
+                    if wb.x1 > (crop_x1 + crop_x2) / 2:
+                        crop_x2 = min(crop_x2, wb.x1)
+                    elif wb.x2 < (crop_x1 + crop_x2) / 2:
+                        crop_x1 = max(crop_x1, wb.x2)
 
         # Sicherstellen, dass der Crop-Bereich gültig ist
         if crop_x2 <= crop_x1 or crop_y2 <= crop_y1:

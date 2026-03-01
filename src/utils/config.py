@@ -22,6 +22,11 @@ DEFAULTS = {
     "output_format": "original",
     "multi_detection_action": "ask",  # "ask" | "all" | "largest" | "highest_conf"
     "preserve_metadata": False,
+    "watermark_strict_filter": True,  # Edge-Region-Filter / edge filter
+    "watermark_enhanced_detection": True,  # TTA + Preprocessing / enhanced mode
+    "watermark_confidence": 0.50,  # Confidence-Schwelle fuer Watermark-YOLO
+    "watermark_template_enabled": False,  # Vorlage markieren (erstes Bild)
+    "watermark_type": "logo",  # "logo" | "text" — Wasserzeichen-Typ
     "window_width": 1200,
     "window_height": 800,
 }
